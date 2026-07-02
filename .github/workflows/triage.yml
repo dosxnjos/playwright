@@ -62,7 +62,7 @@ jobs:
             --enable-all-github-mcp-tools \
             --share=output/copilot-session.md \
             --model claude-opus-4.8 \
-            --max-ai-credits 5 \
+            --max-ai-credits 40 \
             -p "$PROMPT" \
             2>&1 | tee "output/copilot.log"
 
