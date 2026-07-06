@@ -306,10 +306,14 @@ async function cmdUpdate(args: Args): Promise<void> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `trdb-run-${runId}-`));
     try {
       let blobFiles = 0;
+      let downloadedBytes = 0;
+      const downloadStart = Date.now();
       for (const artifactId of artifactIds) {
         const zipBuffer = await downloadArtifactZip(artifactId);
+        downloadedBytes += zipBuffer.length;
         blobFiles += extractBlobZips(zipBuffer, tempDir);
       }
+      const downloadMs = Date.now() - downloadStart;
       if (!blobFiles) {
         console.log(`\nrun ${runId} ${progress}`);
         console.log(`  artifacts held no blob reports, skipping`);
@@ -317,8 +321,11 @@ async function cmdUpdate(args: Args): Promise<void> {
       }
       const run = await fetchRunMetadata(runId);
       console.log(`\nrun ${runId} (${run.workflowName}) ${progress}`);
-      console.log(`  merging ${blobFiles} blob reports from ${artifactIds.length} artifacts`);
+      console.log(`  downloaded ${formatBytes(downloadedBytes)} from ${artifactIds.length} artifacts in ${(downloadMs / 1000).toFixed(1)}s`);
+      console.log(`  merging ${blobFiles} blob reports`);
+      const mergeStart = Date.now();
       mergeRunIntoDb(tempDir, run, dest);
+      console.log(`  merged in ${((Date.now() - mergeStart) / 1000).toFixed(1)}s`);
       importedRuns++;
     } catch (error) {
       // Skip a bad run rather than aborting the whole update.
