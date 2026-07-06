@@ -1,0 +1,22 @@
+{
+  "name": "test-results-db",
+  "version": "0.0.1",
+  "private": true,
+  "description": "PoC: aggregate Playwright CI test results (blob reports) into a single DuckDB file.",
+  "type": "module",
+  "scripts": {
+    "cli": "node src/cli.ts"
+  },
+  "engines": {
+    "node": ">=23.6.0"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^1.5.4-r.1",
+    "@octokit/rest": "^22.0.1",
+    "adm-zip": "^0.5.18"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^26.1.0"
+  }
+}

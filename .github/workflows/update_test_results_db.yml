@@ -1,0 +1,59 @@
+name: "Update test results DB"
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 6 hours, on the hour.
+    - cron: "0 */6 * * *"
+
+# Avoid overlapping runs racing on the shared artifact.
+concurrency:
+  group: update-test-results-db
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update DuckDB
+    runs-on: ubuntu-22.04
+    if: github.repository == 'microsoft/playwright'
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # Build the repo: ingestion shells out to this checkout's own
+      # `merge-reports` CLI (packages/playwright/cli.js -> ./lib/program).
+      - name: Install and build Playwright
+        run: |
+          npm ci
+          npm run build
+      # The DuckDB reporter lives in this package and owns the native
+      # @duckdb/node-api dep; the merge child process resolves it from here.
+      - name: Install test-results-db dependencies
+        working-directory: utils/test-results-db
+        run: npm ci
+      - name: Download current database
+        working-directory: utils/test-results-db
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node src/cli.ts download
+      - name: Ingest new test results
+        working-directory: utils/test-results-db
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Explicit repo root for the merge child process (avoids walk-up).
+          TRDB_REPO_ROOT: ${{ github.workspace }}
+          # merge-reports can be memory-hungry on large runs.
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node src/cli.ts update --lookback-days 3 --max-size-mb 200
+      - name: Upload database
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-db
+          path: utils/test-results-db/test-results.duckdb
+          retention-days: 7
+          overwrite: true
