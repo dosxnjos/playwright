@@ -280,11 +280,13 @@ async function cmdUpdate(args: Args): Promise<void> {
     await closeDb(db);
   }
   console.log(`Test results database`);
-  console.log(`  ${startingRows} rows from ${ingested.size} run(s)`);
+  console.log(`  ${startingRows} rows from ${ingested.size} runs`);
 
   const blobRuns = await listBlobRuns(lookbackDays);
-  console.log(`\nScanning for new runs (last ${lookbackDays} day(s))`);
-  console.log(`  found ${blobRuns.length} run(s) with blob-report artifacts`);
+  const newRuns = blobRuns.filter(({ run }) => !ingested.has(`${run.runId}:${run.runAttempt}`));
+  console.log(`\nScanning for new runs (last ${lookbackDays} days)`);
+  console.log(`  found ${blobRuns.length} runs with blob-report artifacts`);
+  console.log(`  ${newRuns.length} not yet ingested${newRuns.length > maxRuns ? `, ingesting ${maxRuns}` : ''}`);
 
   let importedRuns = 0;
   for (const { run, artifactIds } of blobRuns) {
@@ -311,7 +313,7 @@ async function cmdUpdate(args: Args): Promise<void> {
         console.log(`  artifacts held no blob reports, skipping`);
         continue;
       }
-      console.log(`  merging ${blobFiles} blob report(s) from ${artifactIds.length} artifact(s)`);
+      console.log(`  merging ${blobFiles} blob reports from ${artifactIds.length} artifacts`);
       mergeRunIntoDb(tempDir, run, dest);
       ingested.add(key);
       importedRuns++;
@@ -330,7 +332,7 @@ async function cmdUpdate(args: Args): Promise<void> {
     const before = fileSize(dest);
     const after = await truncateToSize(db, maxBytes);
     console.log(`\nSummary`);
-    console.log(`  imported ${importedRuns} new run(s)`);
+    console.log(`  imported ${importedRuns} new runs`);
     if (after < before)
       console.log(`  truncated ${formatBytes(before)} → ${formatBytes(after)} (cap ${maxSizeMb} MB)`);
     else
@@ -362,7 +364,7 @@ async function cmdIngestLocal(args: Args): Promise<void> {
     prNumber: null,
     runStartedAt: Date.now(),
   };
-  console.log(`Merging ${zips.length} blob report(s) from ${dir} (run ${runId})`);
+  console.log(`Merging ${zips.length} blob reports from ${dir} (run ${runId})`);
   mergeRunIntoDb(dir, metadata, dest);
 
   const db = await openDb(dest);
