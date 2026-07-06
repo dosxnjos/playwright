@@ -205,7 +205,6 @@ async function cmdDownload(): Promise<void> {
 
 async function cmdUpdate(args: Args): Promise<void> {
   const lookbackDays = num(args, 'lookback-days', 3);
-  const maxSizeMb = num(args, 'max-size-mb', 800);
   const maxRuns = num(args, 'max-runs', Infinity);
 
   let ingested: Set<string>;
@@ -267,11 +266,26 @@ async function cmdUpdate(args: Args): Promise<void> {
 
   const db = await openDb(DB_PATH);
   try {
-    const maxBytes = maxSizeMb * 1024 * 1024;
-    const before = fileSize(DB_PATH);
-    const after = await truncateToSize(db, maxBytes);
     console.log(`\nSummary`);
     console.log(`  imported ${importedRuns} new runs`);
+    console.log(`  size ${formatBytes(fileSize(DB_PATH))}`);
+    console.log(`  ${await rowCount(db)} rows total`);
+  } finally {
+    await closeDb(db);
+  }
+
+  if (process.env.GITHUB_OUTPUT)
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `imported=${importedRuns}\n`);
+}
+
+async function cmdTruncate(args: Args): Promise<void> {
+  const maxSizeMb = num(args, 'max-size-mb', 800);
+  const maxBytes = maxSizeMb * 1024 * 1024;
+  const db = await openDb(DB_PATH);
+  try {
+    const before = fileSize(DB_PATH);
+    const after = await truncateToSize(db, maxBytes);
+    console.log(`Truncate`);
     if (after < before)
       console.log(`  truncated ${formatBytes(before)} → ${formatBytes(after)} (cap ${maxSizeMb} MB)`);
     else
@@ -280,9 +294,6 @@ async function cmdUpdate(args: Args): Promise<void> {
   } finally {
     await closeDb(db);
   }
-
-  if (process.env.GITHUB_OUTPUT)
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `imported=${importedRuns}\n`);
 }
 
 async function cmdIngestLocal(args: Args): Promise<void> {
@@ -357,7 +368,8 @@ Ingestion runs a whole CI run's blob reports through the repo's own
 
 Usage:
   cli download                                          fetch the latest db artifact
-  cli update  [--lookback-days <n>] [--max-size-mb <n>] [--max-runs <n>]
+  cli update  [--lookback-days <n>] [--max-runs <n>]    ingest new runs
+  cli truncate [--max-size-mb <n>]                       evict oldest runs past the size cap
   cli ingest-local <blob-report-dir> [--run-id <n>]     (offline/dev)
 
 The database is kept at a fixed, gitignored location:
@@ -377,6 +389,9 @@ async function main(): Promise<void> {
       break;
     case 'update':
       await cmdUpdate(args);
+      break;
+    case 'truncate':
+      await cmdTruncate(args);
       break;
     case 'ingest-local':
       await cmdIngestLocal(args);

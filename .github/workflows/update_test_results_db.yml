@@ -37,7 +37,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node cli.ts update --lookback-days 3 --max-size-mb 800
+        run: node cli.ts update --lookback-days 3
+      - name: Truncate to size cap
+        if: steps.ingest.outputs.imported != '0'
+        working-directory: utils/test-results-db
+        run: node cli.ts truncate --max-size-mb 800
       - name: Upload database
         if: steps.ingest.outputs.imported != '0'
         uses: actions/upload-artifact@v4
