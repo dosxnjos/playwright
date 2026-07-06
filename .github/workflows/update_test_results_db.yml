@@ -1,9 +1,8 @@
 name: "Update test results DB"
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - skn0tt-test-results-duckdb
+  schedule:
+    - cron: "0 */3 * * *"
 
 concurrency:
   group: test-results-db
@@ -13,7 +12,7 @@ jobs:
   update:
     name: Update DuckDB
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 60
     if: github.repository == 'microsoft/playwright'
     permissions:
       actions: read
