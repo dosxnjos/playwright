@@ -32,6 +32,10 @@ runs missing from the file):
 GITHUB_TOKEN=$(gh auth token) node cli.ts update --lookback-days 3
 ```
 
+`update` only ever adds runs — it never deletes. The size-cap eviction is a
+separate `truncate` command that the maintaining workflow runs before uploading,
+so a local `update` never loses data.
+
 Then query it with the `duckdb` CLI (or any DuckDB client) — this package's CLI
 does **not** query, it only maintains the file:
 
