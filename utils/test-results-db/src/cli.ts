@@ -279,10 +279,12 @@ async function cmdUpdate(args: Args): Promise<void> {
     startingRows = await rowCount(db);
     await closeDb(db);
   }
-  console.log(`Database has ${startingRows} rows from ${ingested.size} runs.`);
+  console.log(`Test results database`);
+  console.log(`  ${startingRows} rows from ${ingested.size} run(s)`);
 
   const blobRuns = await listBlobRuns(lookbackDays);
-  console.log(`Found ${blobRuns.length} run(s) with blob-report artifacts in the last ${lookbackDays} day(s).`);
+  console.log(`\nScanning for new runs (last ${lookbackDays} day(s))`);
+  console.log(`  found ${blobRuns.length} run(s) with blob-report artifacts`);
 
   let importedRuns = 0;
   for (const { run, artifactIds } of blobRuns) {
@@ -290,7 +292,7 @@ async function cmdUpdate(args: Args): Promise<void> {
     if (ingested.has(key))
       continue;
     if (importedRuns >= maxRuns) {
-      console.log(`Reached --max-runs=${maxRuns}; stopping.`);
+      console.log(`\nReached --max-runs=${maxRuns}; stopping.`);
       break;
     }
 
@@ -304,22 +306,22 @@ async function cmdUpdate(args: Args): Promise<void> {
         const zipBuffer = await downloadArtifactZip(artifactId);
         blobFiles += extractBlobZips(zipBuffer, tempDir);
       }
+      console.log(`\nrun ${run.runId} (${run.workflowName})`);
       if (!blobFiles) {
-        console.log(`  run ${run.runId} (${run.workflowName}): artifacts held no blob reports, skipping.`);
+        console.log(`  artifacts held no blob reports, skipping`);
         continue;
       }
-      console.log(`  run ${run.runId} (${run.workflowName}): merging ${blobFiles} blob report(s) from ${artifactIds.length} artifact(s) ...`);
+      console.log(`  merging ${blobFiles} blob report(s) from ${artifactIds.length} artifact(s)`);
       mergeRunIntoDb(tempDir, run, dest);
       ingested.add(key);
       importedRuns++;
     } catch (error) {
       // Skip a bad run rather than aborting the whole update.
-      console.error(`  run ${run.runId} failed: ${error instanceof Error ? error.message : error}`);
+      console.error(`  failed: ${error instanceof Error ? error.message : error}`);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
-  console.log(`Imported ${importedRuns} new run(s).`);
 
   // Reopen once at the end for truncation and the final row count.
   const db = await openDb(dest);
@@ -327,11 +329,13 @@ async function cmdUpdate(args: Args): Promise<void> {
     const maxBytes = maxSizeMb * 1024 * 1024;
     const before = fileSize(dest);
     const after = await truncateToSize(db, maxBytes);
+    console.log(`\nSummary`);
+    console.log(`  imported ${importedRuns} new run(s)`);
     if (after < before)
-      console.log(`Truncated database from ${formatBytes(before)} to ${formatBytes(after)} (cap ${maxSizeMb} MB).`);
+      console.log(`  truncated ${formatBytes(before)} → ${formatBytes(after)} (cap ${maxSizeMb} MB)`);
     else
-      console.log(`Database size ${formatBytes(after)} is within the ${maxSizeMb} MB cap.`);
-    console.log(`Final row count: ${await rowCount(db)}`);
+      console.log(`  size ${formatBytes(after)}, within the ${maxSizeMb} MB cap`);
+    console.log(`  ${await rowCount(db)} rows total`);
   } finally {
     await closeDb(db);
   }
@@ -358,12 +362,12 @@ async function cmdIngestLocal(args: Args): Promise<void> {
     prNumber: null,
     runStartedAt: Date.now(),
   };
-  console.log(`Merging ${zips.length} blob report(s) from ${dir} into ${dest} (run ${runId}) ...`);
+  console.log(`Merging ${zips.length} blob report(s) from ${dir} (run ${runId})`);
   mergeRunIntoDb(dir, metadata, dest);
 
   const db = await openDb(dest);
   try {
-    console.log(`Total rows: ${await rowCount(db)} (${formatBytes(fileSize(dest))})`);
+    console.log(`\n${await rowCount(db)} rows total (${formatBytes(fileSize(dest))})`);
   } finally {
     await closeDb(db);
   }
@@ -380,6 +384,10 @@ const REPORTER_PATH = fileURLToPath(new URL('./duckdbReporter.ts', import.meta.u
 // a fixed three levels up.
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
+// Merge config forcing cross-OS blob reports (different absolute testDirs) to
+// merge. See mergeConfig.ts.
+const MERGE_CONFIG_PATH = fileURLToPath(new URL('./mergeConfig.ts', import.meta.url));
+
 /**
  * Merge the blob reports in `blobDir` and write rows into `dbPath` via the
  * DuckDB reporter, by spawning the repo's own `merge-reports` CLI. Run metadata
@@ -388,7 +396,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  */
 function mergeRunIntoDb(blobDir: string, run: RunMetadata, dbPath: string): void {
   const cli = path.join(REPO_ROOT, 'packages/playwright/cli.js');
-  const args = ['merge-reports', path.resolve(blobDir), '--reporter', REPORTER_PATH];
+  const args = ['merge-reports', path.resolve(blobDir), '-c', MERGE_CONFIG_PATH, '--reporter', REPORTER_PATH];
   const env: NodeJS.ProcessEnv = { ...process.env };
   env.TRDB_DB_PATH = path.resolve(dbPath);
   env.TRDB_RUN = JSON.stringify(run);

@@ -55,6 +55,18 @@ function firstError(errors: TestError[]): string | null {
 }
 
 /**
+ * Blob reports carry OS-absolute test paths — e.g. `/home/runner/.../tests/x`
+ * on Linux, `D:\a\...\tests\x` on Windows — so the same test looks different
+ * per runner. Normalize to a forward-slash path relative to the repo test dir
+ * (`tests/...`) so a test's rows agree across operating systems.
+ */
+function relativeTestFile(file: string): string {
+  const posix = file.replaceAll('\\', '/');
+  const i = posix.indexOf('/tests/');
+  return i === -1 ? posix : posix.slice(i + 1);
+}
+
+/**
  * Split the merge-injected `@<botName>` tag out of a test's tags. Returns the
  * recovered bot name and the remaining (real) tags.
  */
@@ -95,7 +107,10 @@ class DuckDBReporter implements Reporter {
   private _written = 0;
 
   printsToStdio(): boolean {
-    return false;
+    // Returning true tells merge-reports we own stdout, which suppresses its
+    // own progress chatter ("extracting: …", "merging events", "building final
+    // report", …). We print a single clean summary line in onEnd instead.
+    return true;
   }
 
   onTestEnd(test: TestCase, result: TestResult): void {
@@ -119,7 +134,7 @@ class DuckDBReporter implements Reporter {
     varchar(projectName);
     appender.appendVarchar(test.id);
     appender.appendVarchar(title);
-    appender.appendVarchar(test.location.file);
+    appender.appendVarchar(relativeTestFile(test.location.file));
     appender.appendInteger(test.location.line);
     appender.appendVarchar(test.expectedStatus);
     appender.appendVarchar(result.status);
@@ -139,7 +154,7 @@ class DuckDBReporter implements Reporter {
       appender.flushSync();
       appender.closeSync();
       // eslint-disable-next-line no-console
-      console.log(`duckdbReporter: wrote ${this._written} rows for run ${run.runId} to ${db.path}`);
+      console.log(`  wrote ${this._written} rows`);
     } finally {
       await closeDb(db);
     }
