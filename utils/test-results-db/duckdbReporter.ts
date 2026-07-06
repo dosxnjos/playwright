@@ -16,23 +16,28 @@
 
 import { TABLE_NAME, closeDb, openDb } from './db.ts';
 
-import { timestampValue } from '@duckdb/node-api';
+import { listValue, structValue, timestampValue } from '@duckdb/node-api';
 
 import type { Db, RunMetadata } from './db.ts';
-import type { DuckDBAppender } from '@duckdb/node-api';
+import type { DuckDBAppender, DuckDBListValue } from '@duckdb/node-api';
 import type { FullResult, Reporter, TestCase, TestError, TestResult } from '@playwright/test/reporter';
 
 // eslint-disable-next-line no-control-regex
 const ansiRegex = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
 const MAX_ERROR_LENGTH = 2000;
 
-function firstError(errors: TestError[]): string | null {
-  for (const error of errors || []) {
-    const raw = error.message ?? error.value;
-    if (raw)
-      return raw.replace(ansiRegex, '').slice(0, MAX_ERROR_LENGTH);
-  }
-  return null;
+function errorMessages(errors: TestError[]): string | null {
+  const messages = (errors || [])
+      .map(error => error.message ?? error.value)
+      .filter((message): message is string => !!message)
+      .map(message => message.replace(ansiRegex, ''));
+  return messages.length ? messages.join('\n\n').slice(0, MAX_ERROR_LENGTH) : null;
+}
+
+function annotationsValue(annotations: TestResult['annotations']): DuckDBListValue | null {
+  const items = (annotations || [])
+      .map(annotation => structValue({ type: annotation.type, description: annotation.description ?? null }));
+  return items.length ? listValue(items) : null;
 }
 
 function relativeTestFile(file: string): string {
@@ -59,6 +64,7 @@ const run: RunMetadata = JSON.parse(runJson);
 
 const varchar = (v: string | null) => v === null ? appender.appendNull() : appender.appendVarchar(v);
 const integer = (v: number | null) => v === null ? appender.appendNull() : appender.appendInteger(v);
+const list = (v: DuckDBListValue | null) => v === null ? appender.appendNull() : appender.appendList(v);
 const tsMillis = (v: number | null) => v === null ? appender.appendNull() : appender.appendTimestamp(timestampValue(BigInt(v) * 1000n));
 
 class DuckDBReporter implements Reporter {
@@ -85,12 +91,14 @@ class DuckDBReporter implements Reporter {
     appender.appendVarchar(title);
     appender.appendVarchar(relativeTestFile(test.location.file));
     appender.appendInteger(test.location.line);
+    appender.appendInteger(test.location.column);
     appender.appendVarchar(test.expectedStatus);
     appender.appendVarchar(result.status);
     appender.appendInteger(result.retry);
     appender.appendBigInt(BigInt(Math.round(result.duration)));
-    varchar(firstError(result.errors));
+    varchar(errorMessages(result.errors));
     varchar(rest.length ? rest.join(' ') : null);
+    list(annotationsValue(result.annotations));
     tsMillis(result.startTime.getTime());
     tsMillis(run.runStartedAt);
     appender.appendDefault();

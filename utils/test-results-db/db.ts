@@ -34,8 +34,7 @@ export type RunMetadata = {
 export const TABLE_NAME = 'test_results';
 
 function createTableSql(qualifiedName: string): string {
-  return `
-CREATE TABLE IF NOT EXISTS ${qualifiedName} (
+  return `CREATE TABLE IF NOT EXISTS ${qualifiedName} (
   run_id BIGINT,
   run_attempt INTEGER,
   workflow_name VARCHAR,
@@ -49,12 +48,14 @@ CREATE TABLE IF NOT EXISTS ${qualifiedName} (
   file VARCHAR,
   -- test_id is intentionally omitted since it's a deterministic hash of (project-name, file, test_title)
   line INTEGER,
+  column_number INTEGER,
   expected_status VARCHAR,
   status VARCHAR,
   retry INTEGER,
   duration_ms BIGINT,
   error_message VARCHAR,
   tags VARCHAR,
+  annotations STRUCT(type VARCHAR, description VARCHAR)[],
   result_started_at TIMESTAMP,
   run_started_at TIMESTAMP,
   ingested_at TIMESTAMP DEFAULT now()

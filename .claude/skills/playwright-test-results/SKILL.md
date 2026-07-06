@@ -54,13 +54,14 @@ Single table `test_results`, one row per test result (**one row per retry**):
 | `bot_name` | e.g. `Ubuntu chromium` — the CI bot (recovered from the merge-injected tag) |
 | `project_name` | Playwright project, e.g. `chromium`, `webkit` |
 | `test_title` | full title path (`describe > test`) |
-| `file`, `line` | source location |
+| `file`, `line`, `column_number` | source location |
 | `expected_status` | `passed` / `skipped` / ... |
 | `status` | actual result: `passed` / `failed` / `timedOut` / `skipped` / `interrupted` |
 | `retry` | 0 = first attempt |
 | `duration_ms` | result duration |
-| `error_message` | first error, ANSI-stripped, truncated to ~2000 chars |
+| `error_message` | all errors joined, ANSI-stripped, total truncated to ~2000 chars |
 | `tags` | space-joined, e.g. `"@slow @flaky"` (LIKE to filter) |
+| `annotations` | list of `{type, description}` structs, e.g. `[{'type': 'skip', 'description': 'flaky on CI'}]` (NULL when none) |
 | `result_started_at`, `run_started_at` | timestamps |
 | `ingested_at` | debug only — when this row was imported (will be dropped later) |
 
