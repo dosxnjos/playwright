@@ -1381,6 +1381,8 @@ it('should throw an Error when aborted in-flight with a string reason', async ({
   await page.setContent(`<button style="display:none">click me</button>`);
   const controller = new AbortController();
   const promise = page.locator('button').click({ signal: controller.signal, timeout: 0 });
+  // Give the action time to start and emit call log entries before aborting.
+  await page.waitForTimeout(500);
   controller.abort('aborted by user');
   const error = await promise.catch(e => e);
   expect(error).toBeInstanceOf(Error);
