@@ -1,6 +1,9 @@
 name: "Fix flaky tests"
 
 on:
+  push:
+    branches:
+      - skn0tt-flaky-test-skill
   workflow_dispatch:
     inputs:
       hint:
