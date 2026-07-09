@@ -220,7 +220,11 @@ test('should not leak dispatchers after closing page', async ({ context, server 
   expect(await queryObjectCount(clientClass.Response)).toBe(0);
 });
 
-test('should not leak workers', async ({ page }) => {
+test('should not leak workers', async ({ page, browserName }) => {
+  // Firefox (Juggler) does not reliably report worker destruction after
+  // `worker.terminate()`, so Playwright never emits the worker `close` event
+  // and the test hangs. Flaky on Firefox across all OSes (macOS and Ubuntu).
+  test.fixme(browserName === 'firefox', 'Firefox does not reliably fire the worker close event after terminate()');
   const before = await queryObjectCount(coreServer.Worker);
   for (let i = 0; i < 5; ++i) {
     const [workerHandle, workerObj] = await Promise.all([
