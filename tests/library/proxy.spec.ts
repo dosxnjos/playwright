@@ -17,6 +17,7 @@
 import { setupSocksForwardingServer } from '../config/proxy';
 import { playwrightTest as it, expect } from '../config/browserTest';
 import net from 'net';
+import os from 'os';
 
 it('should throw for bad server value', async ({ browserType }) => {
   const error = await browserType.launch({
@@ -234,7 +235,7 @@ it('should work with authenticate followed by redirect', async ({ browserName, b
 
 it('should exclude patterns', async ({ browserType, server, channel, browserName, isMac }) => {
   it.skip(channel?.startsWith('msedge'), 'times out while loading the page');
-  it.fixme(browserName === 'firefox' && isMac, 'Flaky 30s navigation timeout on Firefox macOS bots only, likely DNS resolution of the non-existent bypass domains stalling; not reproducible off-CI.');
+  it.fixme(browserName === 'firefox' && isMac && os.arch() === 'x64', 'Flaky 30s navigation timeout on Intel macOS Firefox bots only (arm64 macOS is green); not reproducible off-CI.');
 
   server.setRoute('/target.html', async (req, res) => {
     res.end('<html><title>Served by the proxy</title></html>');
