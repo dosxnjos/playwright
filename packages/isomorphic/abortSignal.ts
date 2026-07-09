@@ -19,27 +19,31 @@ export function assertionAbortedMessage(reason: unknown): string {
   return 'The assertion was aborted' + (detail ? `: ${detail}` : '');
 }
 
-export function combineSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+export function combineSignals(a?: AbortSignal, b?: AbortSignal): { signal: AbortSignal | undefined, cleanup: () => void } {
+  const noop = () => {};
   if (!a)
-    return b;
+    return { signal: b, cleanup: noop };
   if (!b)
-    return a;
+    return { signal: a, cleanup: noop };
   if (a.aborted)
-    return a;
+    return { signal: a, cleanup: noop };
   if (b.aborted)
-    return b;
+    return { signal: b, cleanup: noop };
 
   const controller = new AbortController();
   const onA = () => onAbort(a);
   const onB = () => onAbort(b);
-  const onAbort = (source: AbortSignal) => {
-    controller.abort(source.reason);
+  const cleanup = () => {
     a.removeEventListener('abort', onA);
     b.removeEventListener('abort', onB);
   };
+  const onAbort = (source: AbortSignal) => {
+    controller.abort(source.reason);
+    cleanup();
+  };
   a.addEventListener('abort', onA, { once: true });
   b.addEventListener('abort', onB, { once: true });
-  return controller.signal;
+  return { signal: controller.signal, cleanup };
 }
 
 export class TestEndedError extends Error {}

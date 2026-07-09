@@ -565,7 +565,7 @@ test('should print expected/received before timeout', async ({ runInlineTest }) 
   expect(result.failed).toBe(1);
   expect(result.output).toContain('Test timeout of 2000ms exceeded.');
   expect(result.output).toContain('Expected: "Text 2"');
-  expect(result.output).toContain('Received: "Text content"');
+  expect(result.output).toContain('Error: The assertion was aborted: Test timeout of 2000ms exceeded.');
 });
 
 test('should print pending operations for toHaveText', async ({ runInlineTest }) => {
@@ -584,7 +584,7 @@ test('should print pending operations for toHaveText', async ({ runInlineTest })
   const output = result.output;
   expect(output).toContain(`expect(locator).toHaveText(expected)`);
   expect(output).toContain('Expected: "Text"');
-  expect(output).toContain('Error: element(s) not found');
+  expect(output).toContain('Error: The assertion was aborted: Test timeout of 2000ms exceeded.');
   expect(output).toContain('waiting for locator(\'no-such-thing\')');
 });
 
@@ -640,7 +640,7 @@ test('should print expected/received on Ctrl+C', async ({ interactWithTestRunner
   expect(result.passed).toBe(0);
   expect(result.interrupted).toBe(1);
   expect(result.output).toContain('Expected: "Text 2"');
-  expect(result.output).toContain('Received: "Text content"');
+  expect(result.output).toContain('Error: The assertion was aborted: Test ended.');
 });
 
 test('should not print timed out error message when test times out', async ({ runInlineTest }) => {

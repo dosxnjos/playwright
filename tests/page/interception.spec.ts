@@ -23,12 +23,14 @@ const { globToRegexPattern, urlMatches } = iso;
 
 it('should work with navigation @smoke', async ({ page, server }) => {
   const requests = new Map();
+  const routeContinuations: Promise<unknown>[] = [];
   await page.route('**/*', route => {
     requests.set(route.request().url().split('/').pop(), route.request());
-    void route.continue();
+    routeContinuations.push(route.continue());
   });
   server.setRedirect('/rrredirect', '/frames/one-frame.html');
   await page.goto(server.PREFIX + '/rrredirect');
+  await Promise.all(routeContinuations);
   expect(requests.get('rrredirect').isNavigationRequest()).toBe(true);
   expect(requests.get('frame.html').isNavigationRequest()).toBe(true);
   expect(requests.get('script.js').isNavigationRequest()).toBe(false);

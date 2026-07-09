@@ -50,8 +50,10 @@ test.describe('request handlers', () => {
     respond();
     await expect(component.getByTestId('name')).toHaveText('John Doe');
 
+    const postResponse = page.waitForResponse('**/post');
     await component.getByRole('button', { name: 'Post it' }).click();
     expect(await postBody).toBe('hello from the page');
+    await postResponse;
   });
 
   test('should add dynamically', async ({ page, mount, router }) => {
@@ -179,4 +181,3 @@ test.describe('request handlers', () => {
   });
 
 });
-

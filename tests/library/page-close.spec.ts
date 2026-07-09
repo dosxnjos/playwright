@@ -211,11 +211,15 @@ test('should not throw when continuing while page is closing', async ({ page, se
 
 test('should not throw when continuing after page is closed', async ({ page, server }) => {
   let done;
+  let routeHandledCallback = () => {};
+  const routeHandled = new Promise<void>(f => routeHandledCallback = f);
   await page.route('**/*', async route => {
     await page.close();
     done = route.continue();
+    routeHandledCallback();
   });
   const error = await page.goto(server.EMPTY_PAGE).catch(e => e);
+  await routeHandled;
   await done;
   expect(error).toBeInstanceOf(Error);
 });

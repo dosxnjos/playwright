@@ -156,17 +156,21 @@ export abstract class ChannelOwner<T extends channels.Channel = channels.Channel
               return await this._wrapApiCall(async apiZone => {
                 const validatedParams = validator(params, '', this._validatorToWireContext());
                 const def = this._connection._defaultOperationSignal;
-                const effectiveSignal = combineSignals(signal, def?.aborted ? undefined : def);
-                if (!apiZone.internal && !apiZone.reported) {
-                  // Reporting/tracing/logging this api call for the first time.
-                  apiZone.reported = true;
-                  this._instrumentation.onApiCallBegin(apiZone, { type: this._type, method: prop, params });
-                  logApiCall(this._logger, `=> ${apiZone.apiName} started`);
-                  return await this._connection.sendMessageToServer(this, prop, validatedParams, { ...apiZone, signal: effectiveSignal });
+                const { signal: effectiveSignal, cleanup } = combineSignals(signal, def?.aborted ? undefined : def);
+                try {
+                  if (!apiZone.internal && !apiZone.reported) {
+                    // Reporting/tracing/logging this api call for the first time.
+                    apiZone.reported = true;
+                    this._instrumentation.onApiCallBegin(apiZone, { type: this._type, method: prop, params });
+                    logApiCall(this._logger, `=> ${apiZone.apiName} started`);
+                    return await this._connection.sendMessageToServer(this, prop, validatedParams, { ...apiZone, signal: effectiveSignal });
+                  }
+                  // Since this api call is either internal, or has already been reported/traced once,
+                  // passing as internal.
+                  return await this._connection.sendMessageToServer(this, prop, validatedParams, { internal: true, signal: effectiveSignal });
+                } finally {
+                  cleanup();
                 }
-                // Since this api call is either internal, or has already been reported/traced once,
-                // passing as internal.
-                return await this._connection.sendMessageToServer(this, prop, validatedParams, { internal: true, signal: effectiveSignal });
               }, { internal });
             };
           }
