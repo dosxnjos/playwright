@@ -452,6 +452,9 @@ export class WorkerMain extends ProcessRunner {
 
       testInfo._tracing.didFinishTestFunctionAndAfterEachHooks();
 
+      const abortReason = testInfo.status === 'timedOut' ? 'Test timeout of ' + testInfo.timeout + 'ms exceeded.' : 'Test ended.';
+      testInfo._abortOperations(abortReason);
+
       try {
         // Teardown test-scoped fixtures. Attribute to 'test' so that users understand
         // they should probably increase the test timeout to fix this issue.

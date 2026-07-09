@@ -42,6 +42,14 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
   _defaultContextTimeout?: number;
   _defaultContextNavigationTimeout?: number;
 
+  get _defaultOperationSignal(): AbortSignal | undefined {
+    return this._connection._defaultOperationSignal;
+  }
+
+  set _defaultOperationSignal(signal: AbortSignal | undefined) {
+    this._connection._defaultOperationSignal = signal;
+  }
+
   constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.PlaywrightInitializer) {
     super(parent, type, guid, initializer);
     this.request = new APIRequest(this);

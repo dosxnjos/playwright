@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { ManualPromise } from '@isomorphic/manualPromise';
+import { TestEndedError } from '@isomorphic/abortSignal';
 import { captureRawStack, stringifyStackFrames, filteredStackTrace } from '@utils/stackTrace';
 import { escapeWithQuotes } from '@isomorphic/stringUtils';
 import { monotonicTime } from '@isomorphic/time';
@@ -94,6 +95,7 @@ export class TestInfoImpl implements TestInfo {
   readonly _uniqueSymbol;
 
   private _interruptedPromise = new ManualPromise<void>();
+  readonly _operationAbortController = new AbortController();
   _lastStepId = 0;
   private readonly _requireFile: string;
   readonly _projectInternal: commonConfig.FullProjectInternal;
@@ -402,6 +404,11 @@ export class TestInfoImpl implements TestInfo {
   _abort(location: Location, message: string | undefined) {
     this.annotations.push({ type: 'abort', description: message, location });
     throw new TestAbortError('Test aborted' + (message ? ': ' + message : ''));
+  }
+
+  _abortOperations(reason: string) {
+    if (!this._operationAbortController.signal.aborted)
+      this._operationAbortController.abort(new TestEndedError(reason));
   }
 
   _interrupt() {

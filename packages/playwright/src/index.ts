@@ -384,9 +384,11 @@ const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures, UtilityTestFixt
 
     playwright._defaultContextTimeout = actionTimeout || 0;
     playwright._defaultContextNavigationTimeout = navigationTimeout || 0;
+    playwright._defaultOperationSignal = testInfo._operationAbortController.signal;
     await use();
     playwright._defaultContextTimeout = undefined;
     playwright._defaultContextNavigationTimeout = undefined;
+    playwright._defaultOperationSignal = undefined;
   }, { auto: 'all-hooks-included',  title: 'context configuration', box: true } as any],
 
   _contextFactory: [async ({ browser, video, _reuseContext, _combinedContextOptions /** mitigate dep-via-auto lack of traceability */ }, use, testInfo) => {
@@ -420,8 +422,7 @@ const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures, UtilityTestFixt
         if (closed)
           return;
         closed = true;
-        const closeReason = testInfo.status === 'timedOut' ? 'Test timeout of ' + testInfo.timeout + 'ms exceeded.' : 'Test ended.';
-        await context.close({ reason: closeReason });
+        await context.close();
         const preserveVideo = captureVideo && shouldPreserveVideo(videoMode, testInfo);
         if (preserveVideo) {
           const { pagesWithVideo: pagesForVideo } = contexts.get(context)!;

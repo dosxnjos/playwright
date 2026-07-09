@@ -15,6 +15,7 @@
  */
 
 import colors from 'colors/safe';
+import { TestEndedError } from '@isomorphic/abortSignal';
 import { rewriteErrorMessage } from '@utils/stackTrace';
 import { isUnderTest } from '@utils/debug';
 import { debugLogger } from '@utils/debugLogger';
@@ -86,6 +87,8 @@ export class Connection extends EventEmitter {
   // Used from @playwright/test fixtures -> TODO remove?
   readonly headers: HeadersArray;
   private _objectFactories = new Map<string, ChannelOwnerFactory>();
+
+  _defaultOperationSignal: AbortSignal | undefined;
 
   constructor(localUtils?: LocalUtils, instrumentation?: ClientInstrumentation, headers: HeadersArray = []) {
     super();
@@ -246,6 +249,9 @@ export class Connection extends EventEmitter {
         const parsedError = parseError(error);
         if (callback.signal?.aborted && parsedError instanceof AbortError)
           parsedError.cause = callback.signal.reason;
+        // hack to preserve error message strings from @playwright/test
+        if (parsedError.cause instanceof TestEndedError)
+          rewriteErrorMessage(parsedError, parsedError.cause.message);
         parsedError.log = log || [];
         rewriteErrorMessage(parsedError, parsedError.message + formatCallLog(log));
         const detailsValidator = maybeFindValidator(callback.type, callback.method, 'ErrorDetails');
