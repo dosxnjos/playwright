@@ -247,10 +247,9 @@ export class Connection extends EventEmitter {
       this._callbacks.delete(id);
       if (error && !result) {
         const parsedError = parseError(error);
-        if (callback.signal?.aborted && parsedError instanceof AbortError)
+        if (callback.signal?.aborted)
           parsedError.cause = callback.signal.reason;
-        // hack to preserve error message strings from @playwright/test
-        if (parsedError.cause instanceof TestEndedError)
+        if (parsedError instanceof AbortError && parsedError.cause instanceof TestEndedError)
           rewriteErrorMessage(parsedError, parsedError.cause.message);
         parsedError.log = log || [];
         rewriteErrorMessage(parsedError, parsedError.message + formatCallLog(log));

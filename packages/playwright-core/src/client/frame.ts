@@ -17,7 +17,7 @@
 
 import fs from 'fs';
 
-import { assertionAbortedMessage } from '@isomorphic/abortSignal';
+import { TestEndedError, assertionAbortedMessage } from '@isomorphic/abortSignal';
 import { assert } from '@isomorphic/assert';
 import { getByAltTextSelector, getByLabelSelector, getByPlaceholderSelector, getByRoleSelector, getByTestIdSelector, getByTextSelector, getByTitleSelector } from '@isomorphic/locatorUtils';
 import { urlMatches } from '@isomorphic/urlMatch';
@@ -514,12 +514,18 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
         value: details.received.value !== undefined ? parseResult(details.received.value) : undefined,
         ariaSnapshot: details.received.ariaSnapshot,
       } : undefined;
+      const abortedByUser = e.cause !== undefined && !(e.cause instanceof TestEndedError);
+      let errorMessage: string | undefined;
+      if (abortedByUser)
+        errorMessage = 'Error: ' + assertionAbortedMessage(e.cause);
+      else if (details.customErrorMessage)
+        errorMessage = 'Error: ' + details.customErrorMessage;
       return {
         matches: !!params.isNot,
         received,
         log: e.log,
         timedOut: details.timedOut,
-        errorMessage: details.customErrorMessage ? 'Error: ' + details.customErrorMessage : undefined,
+        errorMessage,
       };
     }
   }
