@@ -16,7 +16,8 @@
 
 import { debugLog } from './relayConnection';
 import { PendingConnections } from './pendingConnection';
-import { ConnectedTabGroup, cleanupStalePlaywrightGroups, isNonDebuggableUrl } from './connectedTabGroup';
+import { ConnectedTabGroup, PLAYWRIGHT_GROUP_TITLE, cleanupStalePlaywrightGroups, isNonDebuggableUrl } from './connectedTabGroup';
+import type { TabOwner } from './connectedTabGroup';
 
 type PageMessage = {
   type: 'connectionRequested';
@@ -34,13 +35,24 @@ type PageMessage = {
   type: 'getConnectionStatus';
 } | {
   type: 'disconnect';
+  // Absent disconnects every active connection (keeps the single-connection
+  // behavior identical to upstream); present targets just that one.
+  connectionId?: number;
 } | {
   type: 'keepalive';
 };
 
+type ActiveConnection = {
+  group: ConnectedTabGroup;
+  clientName: string | undefined;
+  title: string;
+};
+
 class PlaywrightExtension {
-  private _activeGroup: ConnectedTabGroup | undefined;
-  private _activeClientName: string | undefined;
+  // Keyed by selectorTabId — the tab id of the connect page that established
+  // the connection. It stays a stable, unique handle for the connection's
+  // lifetime even after that tab is grouped away or closed.
+  private _connections = new Map<number, ActiveConnection>();
   private _pendingConnections = new PendingConnections();
   // Service worker restarts lose all connection state, so any existing
   // Playwright groups are stale. Connections wait on this before reconciling.
@@ -71,20 +83,30 @@ class PlaywrightExtension {
         // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
         // message sender, where `id` is always defined.
         const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName).then(
+        // A tab explicitly picked from the connect page's list is the user's;
+        // the token/newTab bypass falls back to the connect page itself, which
+        // the agent effectively created for this connection.
+        const seedOwner: TabOwner = message.tab ? 'user' : 'agent';
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
       }
       case 'getConnectionStatus':
         sendResponse({
-          connectedTabIds: this._activeGroup?.connectedTabIds() ?? [],
-          clientName: this._activeClientName,
+          connections: [...this._connections.entries()].map(([id, connection]) => ({
+            id,
+            clientName: connection.clientName,
+            tabIds: connection.group.connectedTabIds(),
+          })),
         });
         return false;
       case 'disconnect':
         try {
-          this._disconnect('User disconnected');
+          if (message.connectionId !== undefined)
+            this._disconnectOne(message.connectionId, 'User disconnected');
+          else
+            this._disconnectAll('User disconnected');
           sendResponse({ success: true });
         } catch (error: any) {
           sendResponse({ success: false, error: error.message });
@@ -97,24 +119,21 @@ class PlaywrightExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner): Promise<void> {
     try {
       await this._cleanupPromise;
-      this._disconnect('Another connection is requested');
 
       const connection = await this._pendingConnections.take(selectorTabId);
       if (!connection)
         throw new Error('Pending client connection closed');
 
-      const group = new ConnectedTabGroup(connection, tab);
+      const title = this._reserveGroupTitle(clientName);
+      const group = new ConnectedTabGroup(connection, tab, title, seedOwner);
       group.onclose = () => {
-        if (this._activeGroup === group) {
-          this._activeGroup = undefined;
-          this._activeClientName = undefined;
-        }
+        if (this._connections.get(selectorTabId)?.group === group)
+          this._connections.delete(selectorTabId);
       };
-      this._activeGroup = group;
-      this._activeClientName = clientName;
+      this._connections.set(selectorTabId, { group, clientName, title });
 
       await Promise.all([
         chrome.tabs.update(tab.id, { active: true }),
@@ -129,6 +148,18 @@ class PlaywrightExtension {
     }
   }
 
+  // `Playwright · <clientName>`, deduped with a `(2)`, `(3)`... suffix against
+  // other currently-open connections so simultaneous clients with the same
+  // name (or none) still get visually distinct groups.
+  private _reserveGroupTitle(clientName: string | undefined): string {
+    const base = clientName ? `${PLAYWRIGHT_GROUP_TITLE} · ${clientName}` : PLAYWRIGHT_GROUP_TITLE;
+    const taken = new Set([...this._connections.values()].map(c => c.title));
+    let title = base;
+    for (let n = 2; taken.has(title); n++)
+      title = `${base} (${n})`;
+    return title;
+  }
+
   private async _getTabs(): Promise<chrome.tabs.Tab[]> {
     const tabs = await chrome.tabs.query({});
     return tabs.filter(tab => !isNonDebuggableUrl(tab.url));
@@ -141,12 +172,17 @@ class PlaywrightExtension {
     });
   }
 
-  // Closes the active group's connection if any. ConnectedTabGroup's onclose
+  // Closes one connection's group, if it exists. ConnectedTabGroup's onclose
   // handles state cleanup (connectedTabIds, badges, reconcile).
-  private _disconnect(reason: string) {
-    this._activeGroup?.close(reason);
-    this._activeGroup = undefined;
-    this._activeClientName = undefined;
+  private _disconnectOne(selectorTabId: number, reason: string) {
+    this._connections.get(selectorTabId)?.group.close(reason);
+    this._connections.delete(selectorTabId);
+  }
+
+  private _disconnectAll(reason: string) {
+    for (const connection of this._connections.values())
+      connection.group.close(reason);
+    this._connections.clear();
   }
 }
 
