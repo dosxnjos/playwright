@@ -59,10 +59,11 @@ class PlaywrightExtension {
   private _cleanupPromise: Promise<void>;
 
   constructor() {
-    // TEMP DEBUG (16/07 investigation, remove before PR): a durable (survives
-    // SW death, unlike an in-memory variable) counter in chrome.storage.session
-    // — reading it > 1 during a test proves the MV3 service worker restarted
-    // mid-test, wiping this class's in-memory state (_connections etc).
+    // TEMP DEBUG (16/07 investigation, retriggered after a broken CI run,
+    // remove before PR): a durable (survives SW death, unlike an in-memory
+    // variable) counter in chrome.storage.session — reading it > 1 during a
+    // test proves the MV3 service worker restarted mid-test, wiping this
+    // class's in-memory state (_connections etc).
     void chrome.storage.session.get('pwdebugRestartCount').then((stored: { pwdebugRestartCount?: number }) => {
       const count = (stored.pwdebugRestartCount ?? 0) + 1;
       void chrome.storage.session.set({ pwdebugRestartCount: count });
