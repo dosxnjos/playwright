@@ -137,8 +137,7 @@ it('should restore state from userDataDir', async ({ browserType, server, create
   await browserContext3.close();
 });
 
-it('should create userDataDir if it does not exist', async ({ createUserDataDir, browserType, browserName }) => {
-  it.fixme(browserName === 'firefox' && process.platform === 'darwin', 'Firefox launchPersistentContext intermittently times out on hosted macOS runners under load.');
+it('should create userDataDir if it does not exist', async ({ createUserDataDir, browserType }) => {
   const userDataDir = path.join(await createUserDataDir(), 'nonexisting');
   const context = await browserType.launchPersistentContext(userDataDir);
   await context.close();
