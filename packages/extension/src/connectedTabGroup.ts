@@ -143,6 +143,8 @@ export class ConnectedTabGroup {
       this._pendingOwner.delete(tabId);
       if (owner === 'agent')
         this._agentOwnedTabs.add(tabId);
+      // eslint-disable-next-line no-console
+      console.log('[PWDEBUG] _onTabGroupChanged entry', { tabId, groupId: this._groupId, owner, agentOwnedTabs: [...this._agentOwnedTabs] });
       if (!isNonDebuggableUrl(tab.url))
         this._connection.attachTab(tab);
     } else {
@@ -192,6 +194,8 @@ export class ConnectedTabGroup {
     const groupTabs = [...this._groupTabIds];
     const agentOwnedTabs = groupTabs.filter(id => this._agentOwnedTabs.has(id));
     const userOwnedTabs = groupTabs.filter(id => !this._agentOwnedTabs.has(id));
+    // eslint-disable-next-line no-console
+    console.log('[PWDEBUG] _onConnectionClose', { groupId: this._groupId, groupTabs, agentOwnedTabs, userOwnedTabs });
     this._groupTabIds.clear();
     this._agentOwnedTabs.clear();
     this._pendingOwner.clear();

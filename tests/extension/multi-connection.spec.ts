@@ -77,6 +77,21 @@ async function connectViaToken(
   return client;
 }
 
+// TEMP DEBUG (16/07 investigation, remove before PR): forwards every service
+// worker console.log (the [PWDEBUG] markers from background.ts /
+// connectedTabGroup.ts) to this Node test process's own stdout, so it lands
+// in the CI job log. Attaches to whichever SW is live now AND to any future
+// one, so a mid-test SW restart still gets captured — multiple "constructed"
+// lines is the tell.
+function captureServiceWorkerConsole(browserContext: BrowserContext): void {
+  const attach = (worker: { on(event: 'console', cb: (msg: { text(): string }) => void): void }) => {
+    worker.on('console', msg => console.log('[SW]', msg.text())); // eslint-disable-line no-console
+  };
+  for (const sw of browserContext.serviceWorkers())
+    attach(sw);
+  browserContext.on('serviceworker', attach);
+}
+
 test.describe(() => {
   test.beforeEach(({ protocolVersion }) => {
     test.skip(protocolVersion === 1, 'Multiple simultaneous connections are a protocol v2 feature');
@@ -85,6 +100,7 @@ test.describe(() => {
   test('two simultaneous connections get independent, named tab groups with no stealing', async ({ browserWithExtension, startClient, server }) => {
     server.setContent('/second', '<title>Second</title><body>Second content</body>', 'text/html');
     const browserContext = await browserWithExtension.launch();
+    captureServiceWorkerConsole(browserContext);
 
     // Agent A connects via the token bypass — agent-owned seed tab.
     const clientA = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
@@ -256,6 +272,7 @@ test.describe(() => {
 
   test('token-bypass seed tab is agent-owned and closes on disconnect', async ({ browserWithExtension, startClient, server }) => {
     const browserContext = await browserWithExtension.launch();
+    captureServiceWorkerConsole(browserContext);
 
     const client = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
     const nav = await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });

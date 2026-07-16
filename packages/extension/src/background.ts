@@ -59,6 +59,14 @@ class PlaywrightExtension {
   private _cleanupPromise: Promise<void>;
 
   constructor() {
+    // TEMP DEBUG (16/07 investigation, remove before PR): console-only (no
+    // chrome.storage — that permission isn't declared and crashed the last
+    // attempt). Multiple "constructed" lines in one test's captured console
+    // proves the MV3 service worker restarted mid-test, wiping this class's
+    // in-memory state (_connections, and each ConnectedTabGroup's ownership
+    // maps) while server-side connections stay alive independently.
+    // eslint-disable-next-line no-console
+    console.log('[PWDEBUG] PlaywrightExtension constructed', Date.now());
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
     this._cleanupPromise = cleanupStalePlaywrightGroups();
@@ -127,9 +135,14 @@ class PlaywrightExtension {
       if (!connection)
         throw new Error('Pending client connection closed');
 
+      // eslint-disable-next-line no-console
+      console.log('[PWDEBUG] _connectTab', { selectorTabId, tabId: tab.id, clientName, seedOwner, existingConnections: [...this._connections.keys()] });
+
       const title = this._reserveGroupTitle(clientName);
       const group = new ConnectedTabGroup(connection, tab, title, seedOwner);
       group.onclose = () => {
+        // eslint-disable-next-line no-console
+        console.log('[PWDEBUG] group.onclose', { selectorTabId, tabId: tab.id, clientName });
         if (this._connections.get(selectorTabId)?.group === group)
           this._connections.delete(selectorTabId);
       };
