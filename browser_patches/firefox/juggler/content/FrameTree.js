@@ -79,7 +79,7 @@ export class FrameTree {
   }
 
   workers() {
-    return [...this._workers.values()];
+    return [...this._workers.values()].filter(worker => worker.isInitialized());
   }
 
   runtime() {
@@ -141,9 +141,11 @@ export class FrameTree {
     const frame = this._frameForWorker(workerDebugger);
     if (!frame)
       return;
-    const worker = new Worker(frame, workerDebugger);
+    const worker = new Worker(frame, workerDebugger, () => {
+      if (this._workers.has(workerDebugger))
+        this.emit(FrameTree.Events.WorkerCreated, worker);
+    });
     this._workers.set(workerDebugger, worker);
-    this.emit(FrameTree.Events.WorkerCreated, worker);
   }
 
   _onWorkerDestroyed(workerDebugger) {
@@ -152,7 +154,8 @@ export class FrameTree {
       return;
     worker.dispose();
     this._workers.delete(workerDebugger);
-    this.emit(FrameTree.Events.WorkerDestroyed, worker);
+    if (worker.isInitialized())
+      this.emit(FrameTree.Events.WorkerDestroyed, worker);
   }
 
   allFramesInBrowsingContextGroup(group) {
@@ -236,10 +239,10 @@ export class FrameTree {
   }
 
   onWindowEvent(event) {
-    if (event.type !== 'DOMDocElementInserted' || !event.target.ownerGlobal)
+    if (event.type !== 'DOMDocElementInserted' || !event.target.documentGlobal)
       return;
 
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = event.target.documentGlobal.docShell;
     const frame = this.frameForDocShell(docShell);
     if (!frame) {
       dump(`WARNING: ${event.type} for unknown frame ${helper.browsingContextToFrameId(docShell.browsingContext)}\n`);
@@ -422,6 +425,7 @@ class Frame {
       wsid: webSocketSerialID + '',
       opcode: frame.opCode,
       data: frame.opCode !== 1 ? btoa(frame.payload) : frame.payload,
+      timestamp: frame.timeStamp / 1_000_000,
     });
     this._webSocketListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWebSocketEventListener, ]),
@@ -492,6 +496,7 @@ class Frame {
           wsid: webSocketSerialID + '',
           opcode: frame.opCode,
           data: frame.opCode !== 1 ? btoa(frame.payload) : frame.payload,
+          timestamp: frame.timeStamp / 1_000_000,
         });
       },
     };
@@ -628,10 +633,11 @@ class Frame {
 }
 
 class Worker {
-  constructor(frame, workerDebugger) {
+  constructor(frame, workerDebugger, onReady) {
     this._frame = frame;
     this._workerId = helper.generateId();
     this._workerDebugger = workerDebugger;
+    this._initialized = false;
 
     workerDebugger.initialize('chrome://juggler/content/content/WorkerMain.js');
 
@@ -639,6 +645,12 @@ class Worker {
     this._channel.setTransport({
       sendMessage: obj => workerDebugger.postMessage(JSON.stringify(obj)),
       dispose: () => {},
+    });
+    this._channel.register('worker', {
+      ready: () => {
+        this._initialized = true;
+        onReady();
+      },
     });
     this._workerDebuggerListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWorkerDebuggerListener]),
@@ -649,6 +661,10 @@ class Worker {
       },
     };
     workerDebugger.addListener(this._workerDebuggerListener);
+  }
+
+  isInitialized() {
+    return this._initialized;
   }
 
   channel() {
