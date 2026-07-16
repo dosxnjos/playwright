@@ -77,6 +77,21 @@ async function connectViaToken(
   return client;
 }
 
+// TEMP DEBUG (16/07 investigation, remove before PR): forwards every
+// service-worker console.log (including [PWDEBUG] markers from
+// background.ts/connectedTabGroup.ts) to the Node test process's own stdout,
+// so it shows up in the CI job log. Also catches a SW restart: a fresh
+// [PWDEBUG] "constructed" line mid-test means the MV3 service worker died and
+// came back, wiping all in-memory connection/ownership state.
+function captureServiceWorkerConsole(browserContext: BrowserContext): void {
+  const attach = (worker: { on(event: 'console', cb: (msg: { text(): string }) => void): void }) => {
+    worker.on('console', msg => console.log('[SW]', msg.text())); // eslint-disable-line no-console
+  };
+  for (const sw of browserContext.serviceWorkers())
+    attach(sw);
+  browserContext.on('serviceworker', attach);
+}
+
 test.describe(() => {
   test.beforeEach(({ protocolVersion }) => {
     test.skip(protocolVersion === 1, 'Multiple simultaneous connections are a protocol v2 feature');
@@ -85,6 +100,7 @@ test.describe(() => {
   test('two simultaneous connections get independent, named tab groups with no stealing', async ({ browserWithExtension, startClient, server }) => {
     server.setContent('/second', '<title>Second</title><body>Second content</body>', 'text/html');
     const browserContext = await browserWithExtension.launch();
+    captureServiceWorkerConsole(browserContext);
 
     // Agent A connects via the token bypass — agent-owned seed tab.
     const clientA = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
@@ -104,6 +120,12 @@ test.describe(() => {
     expect(navB).toHaveResponse({ snapshot: expect.stringContaining('Second content') });
 
     const [sw] = browserContext.serviceWorkers();
+    // TEMP DEBUG (16/07 investigation, remove before PR).
+    const restartCount = await sw.evaluate(async () => {
+      const chrome = (globalThis as any).chrome;
+      return (await chrome.storage.session.get('pwdebugRestartCount')).pwdebugRestartCount;
+    });
+    console.log('[PWDEBUG][test] SW restart count at assertion time:', restartCount); // eslint-disable-line no-console
     const groups = await sw.evaluate(async () => {
       const chrome = (globalThis as any).chrome;
       const all = await chrome.tabGroups.query({});
@@ -256,6 +278,7 @@ test.describe(() => {
 
   test('token-bypass seed tab is agent-owned and closes on disconnect', async ({ browserWithExtension, startClient, server }) => {
     const browserContext = await browserWithExtension.launch();
+    captureServiceWorkerConsole(browserContext);
 
     const client = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
     const nav = await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
@@ -276,11 +299,22 @@ test.describe(() => {
 
     await client.close();
 
+    // TEMP DEBUG (16/07 investigation, remove before PR).
+    const restartCount = await sw.evaluate(async () => {
+      const chrome = (globalThis as any).chrome;
+      return (await chrome.storage.session.get('pwdebugRestartCount')).pwdebugRestartCount;
+    });
+    console.log('[PWDEBUG][test] SW restart count right after client.close():', restartCount); // eslint-disable-line no-console
+
     await expect.poll(async () => {
-      return sw.evaluate(async (targetUrl: string) => {
+      const [count, tabs] = await sw.evaluate(async (targetUrl: string) => {
         const chrome = (globalThis as any).chrome;
-        return (await chrome.tabs.query({ url: targetUrl })).length;
+        const c = (await chrome.storage.session.get('pwdebugRestartCount')).pwdebugRestartCount;
+        const t = await chrome.tabs.query({ url: targetUrl });
+        return [c, t.length];
       }, server.HELLO_WORLD);
+      console.log('[PWDEBUG][test] poll: restart count =', count, 'tab count =', tabs); // eslint-disable-line no-console
+      return tabs;
     }).toBe(0);
   });
 });

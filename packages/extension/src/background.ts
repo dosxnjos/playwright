@@ -59,6 +59,16 @@ class PlaywrightExtension {
   private _cleanupPromise: Promise<void>;
 
   constructor() {
+    // TEMP DEBUG (16/07 investigation, remove before PR): a durable (survives
+    // SW death, unlike an in-memory variable) counter in chrome.storage.session
+    // — reading it > 1 during a test proves the MV3 service worker restarted
+    // mid-test, wiping this class's in-memory state (_connections etc).
+    void chrome.storage.session.get('pwdebugRestartCount').then((stored: { pwdebugRestartCount?: number }) => {
+      const count = (stored.pwdebugRestartCount ?? 0) + 1;
+      void chrome.storage.session.set({ pwdebugRestartCount: count });
+      // eslint-disable-next-line no-console
+      console.log('[PWDEBUG] PlaywrightExtension constructed, restart count =', count);
+    });
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
     this._cleanupPromise = cleanupStalePlaywrightGroups();
@@ -127,9 +137,14 @@ class PlaywrightExtension {
       if (!connection)
         throw new Error('Pending client connection closed');
 
+      // eslint-disable-next-line no-console
+      console.log('[PWDEBUG] _connectTab', { selectorTabId, tabId: tab.id, clientName, seedOwner, existingConnections: [...this._connections.keys()] });
+
       const title = this._reserveGroupTitle(clientName);
       const group = new ConnectedTabGroup(connection, tab, title, seedOwner);
       group.onclose = () => {
+        // eslint-disable-next-line no-console
+        console.log('[PWDEBUG] group.onclose', { selectorTabId, tabId: tab.id, clientName });
         if (this._connections.get(selectorTabId)?.group === group)
           this._connections.delete(selectorTabId);
       };
