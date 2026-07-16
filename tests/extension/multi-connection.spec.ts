@@ -21,32 +21,39 @@ import type { StartClient } from '../mcp/fixtures';
 import type { BrowserContext } from 'playwright';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
-// Connects a client through the tab picker (user-owned seed tab), mirroring
-// clickAllowAndSelect's usage in tab-grouping.spec.ts but parameterized by
-// client name so multiple simultaneous connections get distinct identities.
+// Connects a client through the tab picker (user-owned seed tab). Mirrors the
+// pattern proven in tab-grouping.spec.ts: `browser_navigate` is what actually
+// triggers the extension to open the connect page — it has to be fired before
+// waiting for that page, and awaited only after clicking through it — and is
+// parameterized by client name so multiple simultaneous connections get
+// distinct identities.
 async function connectViaPicker(
   browserContext: BrowserContext,
   startClient: StartClient,
   browserWithExtension: BrowserWithExtension,
   clientName: string,
   tabTitle: string,
+  navigateUrl: string,
 ): Promise<Client> {
-  const connectPagePromise = browserContext.waitForEvent('page', p =>
-    p.url().startsWith(`chrome-extension://${extensionId}/connect.html`)
-  );
-  const clientPromise = startClient({
+  const { client } = await startClient({
     clientName,
     args: ['--extension'],
     env: { PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir },
   });
+  const connectPagePromise = browserContext.waitForEvent('page', p =>
+    p.url().startsWith(`chrome-extension://${extensionId}/connect.html`)
+  );
+  const navigatePromise = client.callTool({ name: 'browser_navigate', arguments: { url: navigateUrl } });
   const connectPage = await connectPagePromise;
   await clickAllowAndSelect(connectPage, tabTitle);
-  return (await clientPromise).client;
+  await navigatePromise;
+  return client;
 }
 
 // Connects a client through the token bypass (agent-owned seed tab, no tab
 // list, no click needed) — mirrors the 'bypass connection dialog with token'
-// scenario in extension.spec.ts.
+// scenario in extension.spec.ts. The caller triggers the actual connection
+// with its own first tool call (e.g. browser_navigate), same as that test.
 async function connectViaToken(
   browserContext: BrowserContext,
   startClient: StartClient,
@@ -87,13 +94,14 @@ test.describe(() => {
     // Agent B connects via the tab picker, on its own pre-existing tab — user-owned seed tab.
     const pageB = await browserContext.newPage();
     await pageB.goto(server.PREFIX + '/second');
-    const clientB = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second');
-    const navB = await clientB.callTool({ name: 'browser_navigate', arguments: { url: server.PREFIX + '/second' } });
-    expect(navB).toHaveResponse({ snapshot: expect.stringContaining('Second content') });
+    const clientB = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second', server.PREFIX + '/second');
 
     // B connecting must not have stolen A's connection.
     const navA2 = await clientA.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
     expect(navA2).toHaveResponse({ snapshot: expect.stringContaining('Hello, world!') });
+
+    const navB = await clientB.callTool({ name: 'browser_navigate', arguments: { url: server.PREFIX + '/second' } });
+    expect(navB).toHaveResponse({ snapshot: expect.stringContaining('Second content') });
 
     const [sw] = browserContext.serviceWorkers();
     const groups = await sw.evaluate(async () => {
@@ -119,11 +127,11 @@ test.describe(() => {
 
     const pageA = await browserContext.newPage();
     await pageA.goto(server.HELLO_WORLD);
-    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Same Name', 'Title');
+    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Same Name', 'Title', server.HELLO_WORLD);
 
     const pageB = await browserContext.newPage();
     await pageB.goto(server.PREFIX + '/second');
-    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Same Name', 'Second');
+    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Same Name', 'Second', server.PREFIX + '/second');
 
     const [sw] = browserContext.serviceWorkers();
     const titles = await sw.evaluate(async () => {
@@ -140,11 +148,11 @@ test.describe(() => {
 
     const pageA = await browserContext.newPage();
     await pageA.goto(server.HELLO_WORLD);
-    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title');
+    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title', server.HELLO_WORLD);
 
     const pageB = await browserContext.newPage();
     await pageB.goto(server.PREFIX + '/second');
-    const clientB = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second');
+    const clientB = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second', server.PREFIX + '/second');
 
     const statusPage = await browserContext.newPage();
     await statusPage.goto(`chrome-extension://${extensionId}/status.html`);
@@ -189,11 +197,11 @@ test.describe(() => {
 
     const pageA = await browserContext.newPage();
     await pageA.goto(server.HELLO_WORLD);
-    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title');
+    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title', server.HELLO_WORLD);
 
     const pageB = await browserContext.newPage();
     await pageB.goto(server.PREFIX + '/second');
-    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second');
+    await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent B', 'Second', server.PREFIX + '/second');
 
     const statusPage = await browserContext.newPage();
     await statusPage.goto(`chrome-extension://${extensionId}/status.html`);
@@ -210,7 +218,7 @@ test.describe(() => {
     // User-owned seed: an existing tab picked from the connect page's list.
     const pageA = await browserContext.newPage();
     await pageA.goto(server.HELLO_WORLD);
-    const clientA = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title');
+    const clientA = await connectViaPicker(browserContext, startClient, browserWithExtension, 'Agent A', 'Title', server.HELLO_WORLD);
 
     // Agent-owned tab: created by the agent itself mid-session.
     await clientA.callTool({ name: 'browser_tabs', arguments: { action: 'new', url: server.PREFIX + '/second' } });
@@ -254,11 +262,17 @@ test.describe(() => {
     expect(nav).toHaveResponse({ snapshot: expect.stringContaining('Hello, world!') });
 
     const [sw] = browserContext.serviceWorkers();
-    const tabCountBefore = await sw.evaluate(async (targetUrl: string) => {
-      const chrome = (globalThis as any).chrome;
-      return (await chrome.tabs.query({ url: targetUrl })).length;
-    }, server.HELLO_WORLD);
-    expect(tabCountBefore).toBe(1);
+
+    // Wait for the seed tab to actually join the group before disconnecting —
+    // browser_navigate resolves once navigation completes, which races ahead
+    // of the (separate, async) chrome.tabs.group() call it triggers.
+    await expect.poll(async () => {
+      return sw.evaluate(async (targetUrl: string) => {
+        const chrome = (globalThis as any).chrome;
+        const [t] = await chrome.tabs.query({ url: targetUrl });
+        return t?.groupId ?? -1;
+      }, server.HELLO_WORLD);
+    }).toBeGreaterThan(-1);
 
     await client.close();
 
