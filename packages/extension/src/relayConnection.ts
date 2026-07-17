@@ -56,6 +56,9 @@ export class RelayConnection {
   onclose?: () => void;
   ontabattached?: (tabId: number) => void;
   ontabdetached?: (tabId: number) => void;
+  // Wired by ConnectedTabGroup (onlabelrequest) to actually dedupe and apply
+  // the label. Rejects if nothing has been wired yet (e.g. group not created).
+  onsetgrouplabel?: (label: string) => Promise<void>;
 
   get attachedTabs(): ReadonlySet<number> {
     return this._attachedTabs;
@@ -68,6 +71,7 @@ export class RelayConnection {
       sendMessage: msg => this._sendMessage(msg),
       notifyTabAttached: tabId => this._notifyTabAttached(tabId),
       notifyTabDetached: tabId => this._notifyTabDetached(tabId),
+      setGroupLabel: label => this._setGroupLabel(label),
     };
     this._handler = protocolVersion === 1
       ? new ProtocolV1Handler(context)
@@ -111,6 +115,12 @@ export class RelayConnection {
     this._notifyTabDetached(tabId);
     this._handler.onUserDetachRequest(tabId);
     this._checkLastTabDetached();
+  }
+
+  private async _setGroupLabel(label: string): Promise<void> {
+    if (!this.onsetgrouplabel)
+      throw new Error('This connection has no tab group to label yet');
+    await this.onsetgrouplabel(label);
   }
 
   private _notifyTabAttached(tabId: number): void {

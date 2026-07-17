@@ -68,7 +68,15 @@ type ContextOptions = {
   config: ContextConfig;
   sessionLog?: SessionLog;
   cwd: string;
+  extensionRelay?: ExtensionSessionRelay;
 };
+
+// Minimal structural interface for the extension relay (CDPRelayServer, in
+// tools/mcp/), so this module doesn't need to import from mcp/ - DEPS.list
+// only allows mcp/ to depend on backend/, never the other way around.
+export interface ExtensionSessionRelay {
+  setGroupLabel(label: string): Promise<void>;
+}
 
 export type RouteEntry = {
   pattern: string;
@@ -95,6 +103,7 @@ export class Context {
   readonly options: ContextOptions;
   private _rawBrowserContext: playwrightTypes.BrowserContext;
   private _browserContextPromise: Promise<playwrightTypes.BrowserContext> | undefined;
+  private _extensionRelay: ExtensionSessionRelay | undefined;
   private _tabs: Tab[] = [];
   private _currentTab: Tab | undefined;
   private _routes: RouteEntry[] = [];
@@ -119,8 +128,16 @@ export class Context {
     this.sessionLog = options.sessionLog;
     this.options = options;
     this._rawBrowserContext = browserContext;
+    this._extensionRelay = options.extensionRelay;
     testDebug('create context');
     process.on('unhandledRejection', this._onUnhandledRejection);
+  }
+
+  // Only set when connected via --extension (see extensionContextFactory.ts).
+  // Used by tools that need to talk to the extension about the connection
+  // itself (e.g. browser_set_group_label), not a specific page/tab.
+  extensionRelay(): ExtensionSessionRelay | undefined {
+    return this._extensionRelay;
   }
 
   async dispose() {

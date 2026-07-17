@@ -35,12 +35,17 @@ import type { ClientInfo } from '../utils/mcp/server';
 import type { Playwright } from '../../client/playwright';
 import type * as playwrightTypes from '../../..';
 import type { BrowserInfo } from '../../serverRegistry';
+import type { CDPRelayServer } from './cdpRelay';
 
 type BrowserWithInfo = {
   browser: playwrightTypes.Browser,
   browserInfo: BrowserInfo,
   canBind: boolean,
   ownership: 'attached' | 'own',
+  // Only set for config.extension - lets tools reach the extension relay for
+  // session-level commands (e.g. browser_set_group_label) that aren't page/
+  // tab operations.
+  relay?: CDPRelayServer,
 };
 
 export async function createBrowserWithInfo(config: FullConfig, clientInfo: ClientInfo, cliOptions: CLIOptions): Promise<BrowserWithInfo> {
@@ -50,6 +55,7 @@ export async function createBrowserWithInfo(config: FullConfig, clientInfo: Clie
   let browser: playwrightTypes.Browser;
   let canBind = false;
   let ownership: 'attached' | 'own' = 'own';
+  let relay: CDPRelayServer | undefined;
   if (config.browser.cdpEndpoint) {
     browser = await createCDPBrowser(config, clientInfo);
     canBind = true;
@@ -60,7 +66,9 @@ export async function createBrowserWithInfo(config: FullConfig, clientInfo: Clie
     ownership = 'own';
   } else if (config.extension) {
     const { channel, executablePath } = resolveExtensionOptions(cliOptions);
-    browser = await createExtensionBrowser(channel, executablePath, clientInfo.clientName);
+    const extensionBrowser = await createExtensionBrowser(channel, executablePath, clientInfo.clientName);
+    browser = extensionBrowser.browser;
+    relay = extensionBrowser.relay;
     ownership = 'attached';
   } else {
     browser = await createPersistentBrowser(config, clientInfo);
@@ -68,7 +76,7 @@ export async function createBrowserWithInfo(config: FullConfig, clientInfo: Clie
     ownership = 'own';
   }
 
-  return { browser, browserInfo: browserInfo(browser, config), canBind, ownership };
+  return { browser, browserInfo: browserInfo(browser, config), canBind, ownership, relay };
 }
 
 export interface BrowserContextFactory {

@@ -228,6 +228,12 @@ playwright-cli open --profile=/path/to/profile
 
 # Connect to browser via Playwright Extension
 playwright-cli attach --extension=chrome
+# MCP clients connected via --extension can additionally call the
+# browser_set_group_label tool to label this session's tab group (shown as
+# "Playwright · <label>" in the browser) - useful so a user running several
+# agents at once can tell tabs apart. No CLI equivalent: the CLI talks to one
+# attached browser directly, so there's no concurrent-session identity to
+# label the way MCP clients may have.
 
 # Connect to a running Chrome or Edge by channel name
 playwright-cli attach --cdp=chrome

@@ -30,6 +30,10 @@ export interface RelayContext {
   // Records that a tab's debugger is now detached. Fires ontabdetached on the
   // owning RelayConnection.
   notifyTabDetached(tabId: number): void;
+  // Requests a label for this connection's tab group. Fires onsetgrouplabel
+  // on the owning RelayConnection - see ConnectedTabGroup.onlabelrequest for
+  // where the request ends up (dedupe + the actual chrome.tabGroups.update).
+  setGroupLabel(label: string): Promise<void>;
 }
 
 export interface ProtocolHandler {
@@ -136,6 +140,11 @@ export class ProtocolV2Handler implements ProtocolHandler {
   }
 
   async handleCommand(message: ProtocolCommand): Promise<any> {
+    if (message.method === 'session.setGroupLabel') {
+      const [label] = (message.params ?? []) as [string];
+      await this._context.setGroupLabel(label);
+      return {};
+    }
     if (ALLOWED_CHROME_COMMANDS.has(message.method)) {
       const args = (message.params ?? []) as any[];
       const result = await invokeChromeMethod(message.method, args);

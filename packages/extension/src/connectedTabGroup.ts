@@ -43,7 +43,7 @@ export async function cleanupStalePlaywrightGroups(): Promise<void> {
     const tabsPerGroup = await Promise.all(staleGroups.map(g => chrome.tabs.query({ groupId: g.id })));
     const tabIds = tabsPerGroup.flat().map(t => t.id).filter((id): id is number => id !== undefined);
     if (tabIds.length)
-      await chrome.tabs.ungroup(tabIds);
+      await chrome.tabs.ungroup(tabIds as [number, ...number[]]);
   } catch (error: any) {
     debugLog('Error cleaning up stale groups:', error);
   }
@@ -73,10 +73,16 @@ export class ConnectedTabGroup {
   // group-entry with no pending entry (typically a user drag) defaults to
   // 'user'.
   private _pendingOwner: Map<number, TabOwner> = new Map();
-  private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void;
+  private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
   onclose?: () => void;
+  // Fired when the client asks (via session.setGroupLabel) to relabel this
+  // connection's group. The caller (background.ts's PlaywrightExtension) owns
+  // cross-connection dedupe - see _reserveGroupTitle - so it computes the
+  // final title and calls setLabel() back; this callback only carries the
+  // raw requested label up to whoever can see every active connection.
+  onlabelrequest?: (label: string) => Promise<void>;
 
   constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, groupTitle: string = PLAYWRIGHT_GROUP_TITLE, seedOwner: TabOwner = 'agent') {
     this._connection = connection;
@@ -84,6 +90,7 @@ export class ConnectedTabGroup {
     this._connection.onclose = () => this._onConnectionClose();
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
     this._connection.ontabdetached = (tabId: number) => this._onTabDetached(tabId);
+    this._connection.onsetgrouplabel = (label: string) => this._onLabelRequested(label);
     this._onTabUpdatedListener = this._onTabUpdated.bind(this);
     this._onTabRemovedListener = this._onTabRemoved.bind(this);
     chrome.tabs.onUpdated.addListener(this._onTabUpdatedListener);
@@ -109,7 +116,25 @@ export class ConnectedTabGroup {
     this._connection.close(reason);
   }
 
-  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): void {
+  private async _onLabelRequested(label: string): Promise<void> {
+    if (!this.onlabelrequest)
+      throw new Error('No label handler registered for this connection');
+    await this.onlabelrequest(label);
+  }
+
+  // Applies an already-deduped, already-prefixed title (see background.ts's
+  // _reserveGroupTitle) to this connection's Chrome tab group. Takes the
+  // final title rather than the raw label so the "Playwright · X" prefix and
+  // (2)/(3) dedupe suffix are computed in exactly one place - the caller,
+  // which is also the only place with visibility into every other active
+  // connection's current title.
+  async setLabel(title: string): Promise<void> {
+    this._groupTitle = title;
+    if (this._groupId !== null)
+      await chrome.tabGroups.update(this._groupId, { title });
+  }
+
+  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab): void {
     if (changeInfo.groupId !== undefined)
       this._onTabGroupChanged(tabId, tab);
     if (changeInfo.url === undefined)
@@ -196,7 +221,7 @@ export class ConnectedTabGroup {
     this._agentOwnedTabs.clear();
     this._pendingOwner.clear();
     if (userOwnedTabs.length) {
-      this._retryOnDrag(() => chrome.tabs.ungroup(userOwnedTabs)).catch(error => {
+      this._retryOnDrag(() => chrome.tabs.ungroup(userOwnedTabs as [number, ...number[]])).catch(error => {
         debugLog('Error ungrouping tabs on close:', error);
       });
     }

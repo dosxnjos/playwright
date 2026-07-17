@@ -19,7 +19,7 @@ import debug from 'debug';
 import { Context } from './context';
 import { Response } from './response';
 import { SessionLog } from './sessionLog';
-import type { ContextConfig } from './context';
+import type { ContextConfig, ExtensionSessionRelay } from './context';
 import type * as playwright from '../../..';
 import type { Tool } from './tool';
 import type * as mcpServer from '../utils/mcp/server';
@@ -31,12 +31,14 @@ export class BrowserBackend implements ServerBackend {
   private _sessionLog: SessionLog | undefined;
   private _config: ContextConfig;
   private _disconnected = false;
+  private _extensionRelay: ExtensionSessionRelay | undefined;
   readonly browserContext: playwright.BrowserContext;
 
-  constructor(config: ContextConfig, browserContext: playwright.BrowserContext, tools: Tool[]) {
+  constructor(config: ContextConfig, browserContext: playwright.BrowserContext, tools: Tool[], extensionRelay?: ExtensionSessionRelay) {
     this._config = config;
     this._tools = tools;
     this.browserContext = browserContext;
+    this._extensionRelay = extensionRelay;
     const markDisconnected = () => { this._disconnected = true; };
     this.browserContext.once('close', markDisconnected);
     this.browserContext.browser()?.once('disconnected', markDisconnected);
@@ -48,6 +50,7 @@ export class BrowserBackend implements ServerBackend {
       config: this._config,
       sessionLog: this._sessionLog,
       cwd: clientInfo.cwd,
+      extensionRelay: this._extensionRelay,
     });
   }
 

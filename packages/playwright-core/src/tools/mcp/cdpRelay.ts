@@ -102,6 +102,17 @@ export class CDPRelayServer {
     return `${this._wsHost}${this._cdpPath}`;
   }
 
+  // Session-level command, not modeled as a CDP command: sets a label on this
+  // connection's tab group title in the extension UI. Goes straight over the
+  // same extension WebSocket used for CDP commands (ExtensionConnection.send
+  // doesn't care whether the method is CDP-shaped), bypassing the CDP-only
+  // ExtensionProtocolV1/V2 handler entirely.
+  async setGroupLabel(label: string): Promise<void> {
+    if (!this._extensionConnection)
+      throw new Error('Extension not connected');
+    await this._extensionConnection.send('session.setGroupLabel', [label]);
+  }
+
   extensionEndpoint() {
     return `${this._wsHost}${this._extensionPath}`;
   }

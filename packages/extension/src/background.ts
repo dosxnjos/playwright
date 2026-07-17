@@ -133,6 +133,13 @@ class PlaywrightExtension {
         if (this._connections.get(selectorTabId)?.group === group)
           this._connections.delete(selectorTabId);
       };
+      group.onlabelrequest = async (label: string) => {
+        const newTitle = this._reserveGroupTitle(label, selectorTabId);
+        const active = this._connections.get(selectorTabId);
+        if (active)
+          active.title = newTitle;
+        await group.setLabel(newTitle);
+      };
       this._connections.set(selectorTabId, { group, clientName, title });
 
       await Promise.all([
@@ -150,10 +157,17 @@ class PlaywrightExtension {
 
   // `Playwright · <clientName>`, deduped with a `(2)`, `(3)`... suffix against
   // other currently-open connections so simultaneous clients with the same
-  // name (or none) still get visually distinct groups.
-  private _reserveGroupTitle(clientName: string | undefined): string {
+  // name (or none) still get visually distinct groups. Also reused to
+  // re-dedupe when a client relabels an existing connection (session.
+  // setGroupLabel) - excludeSelectorTabId leaves that connection's own
+  // (soon-to-be-replaced) title out of the "taken" set, so it never dedupes
+  // against itself.
+  private _reserveGroupTitle(clientName: string | undefined, excludeSelectorTabId?: number): string {
     const base = clientName ? `${PLAYWRIGHT_GROUP_TITLE} · ${clientName}` : PLAYWRIGHT_GROUP_TITLE;
-    const taken = new Set([...this._connections.values()].map(c => c.title));
+    const taken = new Set(
+        [...this._connections.entries()]
+            .filter(([id]) => id !== excludeSelectorTabId)
+            .map(([, c]) => c.title));
     let title = base;
     for (let n = 2; taken.has(title); n++)
       title = `${base} (${n})`;

@@ -104,6 +104,20 @@ export type ExtensionEventsV2 = {
   };
 };
 
+// Protocol v2: session-level commands. Unlike ExtensionCommandV2, these don't
+// mirror a chrome.* API call spread on the extension side — they operate on
+// the relay connection itself (e.g. extension UI state for this connection),
+// not a specific CDP target/tab.
+export type ExtensionSessionCommand = {
+  // Sets a short label for this connection's tab group title in the
+  // extension UI, so the user can tell connections apart when several are
+  // active at once.
+  'session.setGroupLabel': {
+    params: [label: string];
+    result: void;
+  };
+};
+
 // Protocol v1: legacy single-tab interface.
 export type ExtensionCommandV1 = {
   'attachToTab': {
@@ -131,5 +145,5 @@ export type ExtensionEventsV1 = {
 };
 
 // Combined types for the relay which supports both protocol versions.
-export type ExtensionCommand = ExtensionCommandV1 & ExtensionCommandV2;
+export type ExtensionCommand = ExtensionCommandV1 & ExtensionCommandV2 & ExtensionSessionCommand;
 export type ExtensionEvents = ExtensionEventsV1 & ExtensionEventsV2;
