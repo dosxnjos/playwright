@@ -140,6 +140,20 @@ body {
   border-color: #c73836;
 }
 
+/* One block per active connection on the status page (multiple simultaneous
+   clients each get their own header + tab list). */
+.connection-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #d0d7de;
+}
+
+.connection-section:last-of-type {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 /* Connection header */
 .connection-header {
   display: flex;
