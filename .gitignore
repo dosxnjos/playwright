@@ -42,3 +42,7 @@ playwright.env
 /firefox/
 .playwright/
 .npmrc
+/scripts/.build-stamp
+/scripts/.build-lock
+/scripts/.build-log.txt
+/temp/
