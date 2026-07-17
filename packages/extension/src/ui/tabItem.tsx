@@ -16,6 +16,17 @@
 
 import React from 'react';
 
+// MCP clients identify themselves with a program-style name (e.g. "claude-code"),
+// not necessarily one meant for display - title-case kebab/snake-case segments so
+// the connection UI shows "Claude Code" instead of the raw identifier. A no-op for
+// names that are already display-ready (spaces, existing capitals, no separators).
+export function prettifyClientName(name: string): string {
+  return name
+      .split(/[-_]+/)
+      .map(word => word ? word[0].toUpperCase() + word.slice(1) : word)
+      .join(' ');
+}
+
 export const Button: React.FC<{ variant: 'primary' | 'default' | 'reject'; onClick: () => void; children: React.ReactNode }> = ({
   variant,
   onClick,

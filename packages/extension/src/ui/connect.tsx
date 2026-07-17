@@ -16,7 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, TabItem } from './tabItem';
+import { Button, TabItem, prettifyClientName } from './tabItem';
 import { AuthTokenSection, getOrCreateAuthToken } from './authToken';
 
 type Status =
@@ -62,7 +62,7 @@ const ConnectApp: React.FC = () => {
       let info = 'unknown';
       try {
         const client = JSON.parse(params.get('client') || '{}');
-        info = `${client.name || 'unknown'}`;
+        info = prettifyClientName(client.name || 'unknown');
         setClientInfo(info);
         setStatus({
           type: 'connecting',
