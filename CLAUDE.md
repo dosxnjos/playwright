@@ -218,6 +218,115 @@ versioned protocol (`SUPPORTED_PROTOCOL_VERSION = 2` in `connect.tsx`); `~/.clau
 pin `@playwright/mcp@<version>` instead of `@latest` once this extension is adopted, so the server
 and this forked extension never drift apart silently.
 
+### Running the MCP server from this fork (`scripts/run-mcp-server.cjs`)
+
+`~/.claude.json`'s `mcpServers.playwright` used to run `npx -y @playwright/mcp@0.0.78
+--extension --browser chrome`, which always fetches Microsoft's published package and
+completely ignores this local checkout — so any change made here (a new tool, an improved
+tool `description`, a protocol tweak) was dormant until manually wired up. `scripts/
+run-mcp-server.cjs` replaces that command so Claude Code runs the **local fork build**
+instead, without turning a broken local build into an outage of every Claude Code instance
+on this machine.
+
+**Why it isn't a naive "run `npm run build` then start the server"**: measured on 17/07/2026,
+a cold `npm run build` takes ~28s and even a single-file touch takes ~18s (`build.js` is not
+meaningfully incremental — it always reprocesses everything). Neither fits with margin under
+Claude Code's MCP server-startup timeout (~30s). So the wrapper never blocks the handshake on
+a build:
+
+- **Fork build up to date** (a stamp file is newer than everything under
+  `packages/playwright-core/src/`) → spawns the local fork (`packages/playwright-core/lib/
+  entry/mcp.js`) directly.
+- **Fork stale or missing** → immediately spawns the official `npx @playwright/mcp@0.0.78`
+  package for *this* launch (never blocks), and kicks off `npm run build` in the background
+  via `scripts/background-build.cjs` — a **fully detached, independent process**, not an
+  in-process event listener, because a short-lived wrapper invocation could otherwise exit
+  before an 18-28s build finishes and orphan that listener, leaving the stamp/lock stuck
+  forever. The next launch picks up the fresh fork once that background build finishes.
+- **Background build fails** (e.g. a syntax error introduced mid-edit) → logged to
+  `scripts/.build-log.txt` with a clear failure line; the stamp is left stale so *every*
+  subsequent launch keeps retrying the build (still without blocking) until the fork is
+  fixed. Meanwhile every launch keeps using the `npx` fallback — degraded (new tools /
+  improved descriptions are unavailable, e.g. the ones from
+  `roadmap/2026-07-17-melhoria-descricao-browser-tabs.md`), never broken.
+- Concurrent launches (multiple Claude Code instances starting around the same time) don't
+  race each other into simultaneous builds: the background build is gated by an atomic
+  `fs.mkdirSync` lock (`scripts/.build-lock`); whoever doesn't get the lock just uses the
+  `npx` fallback for that launch too.
+
+**To point `~/.claude.json` at it** (same `env` token vault, only `command`/`args` change):
+```json
+"command": "node",
+"args": ["C:\\Dev\\playwright\\scripts\\run-mcp-server.cjs", "--extension", "--browser", "chrome"]
+```
+Requires restarting running Claude Code instances to pick up the change — this is live config
+shared by all of them, don't edit it without confirming first.
+
+**To force pure `npx` again** (if the wrapper itself misbehaves, not just the build): revert
+`~/.claude.json`'s `command`/`args` back to `"npx", ["-y", "@playwright/mcp@0.0.78",
+"--extension", "--browser", "chrome"]`. No code change needed — the wrapper is only referenced
+from that one config entry.
+
+`scripts/.build-stamp`, `scripts/.build-lock`, and `scripts/.build-log.txt` are local runtime
+state (gitignored) — safe to delete by hand at any time to force the next launch to treat the
+fork as stale and rebuild.
+
+### Keeping up with upstream (rebase routine)
+
+`upstream` (`https://github.com/microsoft/playwright.git`) is separate from `origin`
+(`dosxnjos/playwright`, where this fork's own work gets pushed). Rebase before starting a new
+work session on this fork, not on a cron — the volume of upstream commits doesn't justify
+automating this yet, and an unsupervised automatic rebase could silently break this fork's own
+changes (same class of risk as an unattended build, see the wrapper above).
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+**Most likely conflict**: `packages/playwright-core/src/tools/backend/tools.ts` — it's a single
+central list (`browserTools` array) that every new MCP tool registers into, upstream or here, so
+it's the file most likely to have both sides touch the same region. Resolve by keeping both
+additions (upstream's new tool imports/entries alongside this fork's `groupLabel` import/entry),
+not by picking one side.
+
+**After any rebase**, run `npm run build && npm run flint` before considering it done. The Fase 0
+wrapper (`scripts/run-mcp-server.cjs`) covers "rebuild by the next launch," but `flint` (full
+lint + tsc) doesn't run automatically and can catch a type break the build step alone misses.
+
+### `npm run flint`/`tsc -p .` at the repo root does NOT check `packages/extension/` (17/07/2026)
+
+**Real incident, not a hypothetical**: a fix to `connect.tsx` shipped with a block-scope bug
+(`const info` declared inside a `try {}`, used outside it — a plain `ReferenceError` at runtime)
+that `npm run flint` reported as fully clean. It broke every live connection through the extension
+(tab opened outside any group, client hung waiting forever) until caught by the browser's own
+console after a real reload.
+
+**Root cause**: `packages/extension/` has two of its own `tsconfig.json` files, neither referenced
+by the root `tsconfig.json` project, so the root `tsc -p .` (and therefore `flint`, which shells
+out to it) silently skips this entire package:
+- `packages/extension/tsconfig.ui.json` — covers `src/ui/` (React UI: `connect.tsx`, `status.tsx`,
+  `authToken.tsx`, `tabItem.tsx`...). This is where the bug above lived.
+- `packages/extension/tsconfig.json` — covers the rest of `src/` (`background.ts`,
+  `connectedTabGroup.ts`, `relayConnection.ts`, `protocolHandlers.ts`...), explicitly excluding
+  `src/ui`.
+
+**Rule going forward**: after touching anything under `packages/extension/src/`, run, from inside
+`packages/extension/`:
+```bash
+npx tsc -p tsconfig.ui.json --noEmit
+npx tsc -p tsconfig.json --noEmit
+```
+in addition to (not instead of) the root `npm run flint`. A clean `flint` run gives zero signal
+about this package's own type correctness.
+
+**Known pre-existing gap in `tsconfig.json`'s own output** (found 17/07 running it for the first
+time in this fork's lifetime, not introduced by any change this fork made): 4 type errors in
+`connectedTabGroup.ts`, all `@types/chrome` mismatches (`chrome.tabs.TabChangeInfo` doesn't exist
+in the installed types package; `chrome.tabs.ungroup` expects a `[number, ...number[]]` tuple, gets
+a plain `number[]`). Confirmed via `git show HEAD:packages/extension/src/connectedTabGroup.ts` that
+these lines predate this fork's own changes — not a regression, but real and uncorrected.
+
 ### Testing gotchas found in this fork (16/07/2026)
 
 - **`npm run test-extension` is not reliable on Windows.** `.github/workflows/tests_extension.yml`
