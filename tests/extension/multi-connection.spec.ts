@@ -74,22 +74,19 @@ async function connectViaToken(
       PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
     },
   });
+  // TEMP WORKAROUND (16/07 investigation, revisit before PR): the server's
+  // MCP `notifications/initialized` handler (initializeServer() in
+  // utils/mcp/server.ts) populates clientInfo.clientName asynchronously,
+  // after client.connect()/ping() already resolve. The picker path
+  // incidentally outruns that race because clickAllowAndSelect takes real
+  // wall-clock time; the token bypass connects immediately and can win the
+  // race, landing clientName as "unknown" (confirmed via [PWDEBUG] logs: it
+  // shows up wrong from this connection's very first _connectTab call, no
+  // later corruption). Giving the server a moment here is a test-only
+  // mitigation — the underlying race is upstream server code, out of this
+  // fork's scope (D1: no server changes).
+  await new Promise(resolve => setTimeout(resolve, 500));
   return client;
-}
-
-// TEMP DEBUG (16/07 investigation, remove before PR): forwards every service
-// worker console.log (the [PWDEBUG] markers from background.ts /
-// connectedTabGroup.ts) to this Node test process's own stdout, so it lands
-// in the CI job log. Attaches to whichever SW is live now AND to any future
-// one, so a mid-test SW restart still gets captured — multiple "constructed"
-// lines is the tell.
-function captureServiceWorkerConsole(browserContext: BrowserContext): void {
-  const attach = (worker: { on(event: 'console', cb: (msg: { text(): string }) => void): void }) => {
-    worker.on('console', msg => console.log('[SW]', msg.text())); // eslint-disable-line no-console
-  };
-  for (const sw of browserContext.serviceWorkers())
-    attach(sw);
-  browserContext.on('serviceworker', attach);
 }
 
 test.describe(() => {
@@ -100,7 +97,6 @@ test.describe(() => {
   test('two simultaneous connections get independent, named tab groups with no stealing', async ({ browserWithExtension, startClient, server }) => {
     server.setContent('/second', '<title>Second</title><body>Second content</body>', 'text/html');
     const browserContext = await browserWithExtension.launch();
-    captureServiceWorkerConsole(browserContext);
 
     // Agent A connects via the token bypass — agent-owned seed tab.
     const clientA = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
@@ -272,7 +268,6 @@ test.describe(() => {
 
   test('token-bypass seed tab is agent-owned and closes on disconnect', async ({ browserWithExtension, startClient, server }) => {
     const browserContext = await browserWithExtension.launch();
-    captureServiceWorkerConsole(browserContext);
 
     const client = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
     const nav = await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
