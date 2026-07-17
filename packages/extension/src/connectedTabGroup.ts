@@ -43,7 +43,7 @@ export async function cleanupStalePlaywrightGroups(): Promise<void> {
     const tabsPerGroup = await Promise.all(staleGroups.map(g => chrome.tabs.query({ groupId: g.id })));
     const tabIds = tabsPerGroup.flat().map(t => t.id).filter((id): id is number => id !== undefined);
     if (tabIds.length)
-      await chrome.tabs.ungroup(tabIds);
+      await chrome.tabs.ungroup(tabIds as [number, ...number[]]);
   } catch (error: any) {
     debugLog('Error cleaning up stale groups:', error);
   }
@@ -73,7 +73,7 @@ export class ConnectedTabGroup {
   // group-entry with no pending entry (typically a user drag) defaults to
   // 'user'.
   private _pendingOwner: Map<number, TabOwner> = new Map();
-  private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void;
+  private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
   onclose?: () => void;
@@ -109,7 +109,7 @@ export class ConnectedTabGroup {
     this._connection.close(reason);
   }
 
-  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): void {
+  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab): void {
     if (changeInfo.groupId !== undefined)
       this._onTabGroupChanged(tabId, tab);
     if (changeInfo.url === undefined)
@@ -196,7 +196,7 @@ export class ConnectedTabGroup {
     this._agentOwnedTabs.clear();
     this._pendingOwner.clear();
     if (userOwnedTabs.length) {
-      this._retryOnDrag(() => chrome.tabs.ungroup(userOwnedTabs)).catch(error => {
+      this._retryOnDrag(() => chrome.tabs.ungroup(userOwnedTabs as [number, ...number[]])).catch(error => {
         debugLog('Error ungrouping tabs on close:', error);
       });
     }
