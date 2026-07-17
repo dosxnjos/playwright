@@ -129,6 +129,22 @@ const ConnectApp: React.FC = () => {
     return () => clearInterval(keepalive);
   }, []);
 
+  useEffect(() => {
+    // Defensive: a neighboring connection's tab group can otherwise pick up
+    // this page (Chrome inserts a new window's tab into the active group) -
+    // connectedTabGroup.ts's isOwnConnectPage check is the primary defense,
+    // this just avoids ever sitting grouped in the first place.
+    void (async () => {
+      try {
+        const tab = await chrome.tabs.getCurrent();
+        if (tab?.id !== undefined && tab.groupId !== undefined && tab.groupId !== -1)
+          await chrome.tabs.ungroup(tab.id);
+      } catch {
+        // May fail while a drag is in progress - best effort only.
+      }
+    })();
+  }, []);
+
   const loadTabs = useCallback(async () => {
     const response = await chrome.runtime.sendMessage({ type: 'getTabs' });
     if (response.success)

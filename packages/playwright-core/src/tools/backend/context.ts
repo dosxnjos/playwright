@@ -33,6 +33,7 @@ import type { Disposable } from '@isomorphic/disposable';
 import type { ToolCapability } from './tool';
 
 const testDebug = debug('pw:mcp:test');
+const errorDebug = debug('pw:mcp:error');
 
 export type ContextConfig = {
   allowUnrestrictedFileAccess?: boolean;
@@ -183,6 +184,14 @@ export class Context {
     const browserContext = await this.ensureBrowserContext();
     const page = await browserContext.newPage();
     this._currentTab = this._tabs.find(t => t.page === page)!;
+    // The token-bypass seed tab (connect.html) is left orphaned when the
+    // first action after a reconnect is creating a new tab instead of
+    // reusing it - see microsoft/playwright#41843.
+    for (const tab of [...this._tabs]) {
+      const url = tab.page.url();
+      if (tab !== this._currentTab && url.startsWith('chrome-extension://') && url.includes('/connect.html?mcpRelayUrl='))
+        await tab.page.close().catch(() => {});
+    }
     return this._currentTab;
   }
 
@@ -202,8 +211,10 @@ export class Context {
       await this._currentTab!.page.close().catch(() => {});
       this._currentTab = undefined;
     }
-    if (!this._currentTab)
+    if (!this._currentTab) {
+      errorDebug(`ensureTab: no current tab, creating new one (tabs=${this._tabs.length})`);
       await this.newTab();
+    }
     if (crashed)
       this._currentTab!.logErrorMessage('Page crashed and was reset to about:blank.');
     await this._currentTab!.waitForInitialized();

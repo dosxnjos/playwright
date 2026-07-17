@@ -33,10 +33,14 @@
  *     same model inputs and are translated into CDP events on the fly.
  */
 
-import { logUnhandledError } from './log';
+import debug from 'debug';
 
 import type { CDPMessage, SendCommand, SendToCDPClient } from './cdpRelayHandler';
 import type { DebuggerSession, Debuggee, Tab } from './protocol';
+
+// Same 'pw:mcp:error' channel as log.ts's logUnhandledError - attach failures
+// here get tab context (id/url) instead of just the bare error.
+const attachErrorDebug = debug('pw:mcp:error');
 
 type TabSession = {
   tabId: number;
@@ -82,8 +86,12 @@ export class BrowserModel {
     if (tab.id === undefined)
       return;
     this._knownTabs.set(tab.id, tab);
-    if (this._autoAttach)
-      void this._attachTab(tab.id).catch(logUnhandledError);
+    if (this._autoAttach) {
+      const tabId = tab.id;
+      void this._attachTab(tabId).catch(error => {
+        attachErrorDebug(`attach failed for tab ${tabId} (${tab.url}): ${error}`);
+      });
+    }
   }
 
   onTabRemoved(tabId: number): void {
@@ -124,7 +132,21 @@ export class BrowserModel {
   async enableAutoAttach(): Promise<void> {
     this._autoAttach = true;
     const tabIds = [...this._knownTabs.keys()];
-    await Promise.all(tabIds.map(tabId => this._attachTab(tabId).catch(logUnhandledError)));
+    await Promise.all(tabIds.map(tabId => this._attachTab(tabId).catch(error => {
+      attachErrorDebug(`attach failed for tab ${tabId} (${this._knownTabs.get(tabId)?.url}): ${error}`);
+    })));
+    if (this._tabSessions.size === 0 && tabIds.length > 0) {
+      attachErrorDebug(`ANOMALY: setAutoAttach answered with 0 attached of ${tabIds.length} known tabs`);
+      // Covers a short race (e.g. the extension hasn't finished registering
+      // the tab yet); a persistent failure like "Another debugger is already
+      // attached" survives this retry unchanged - that case is prevented
+      // upstream by not attaching the connect page in the first place.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await Promise.all(tabIds.map(tabId => this._attachTab(tabId).catch(error => {
+        attachErrorDebug(`retry attach failed for tab ${tabId} (${this._knownTabs.get(tabId)?.url}): ${error}`);
+      })));
+      attachErrorDebug(`retry result: ${this._tabSessions.size} of ${tabIds.length} known tabs attached`);
+    }
   }
 
   async createTarget(url: string | undefined): Promise<{ targetId: string | undefined }> {

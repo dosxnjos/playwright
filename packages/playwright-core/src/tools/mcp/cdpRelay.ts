@@ -71,6 +71,11 @@ export class CDPRelayServer {
   private _protocolVersion: number;
   private _handler: ExtensionProtocolHandler;
   private _extensionConnectionPromise = new ManualPromise<void>();
+  // Keeps the MV3 service worker's idle timer from expiring once the connect
+  // page (its previous keepalive source) navigates away or closes - see
+  // microsoft/playwright#41843. Any received WebSocket message resets the
+  // timer (Chrome 116+), so the ping's result is irrelevant.
+  private _keepaliveInterval: NodeJS.Timeout | null = null;
 
   constructor(server: http.Server, browserChannel: string, executablePath?: string) {
     this._wsHost = addressToString(server.address(), { protocol: 'ws' });
@@ -240,11 +245,29 @@ export class CDPRelayServer {
     this._extensionConnection = new ExtensionConnection(ws);
     this._extensionConnection.onclose = reason => {
       debugLogger('Extension WebSocket closed:', reason);
+      this._stopKeepalive();
       this._handler.onExtensionDisconnect(reason);
       this._closeCDPConnection(`Extension disconnected: ${reason}`);
     };
     this._extensionConnection.onmessage = (method, params) => this._handler.handleExtensionEvent(method, params);
     this._extensionConnectionPromise.resolve();
+    this._startKeepalive();
+  }
+
+  private _startKeepalive(): void {
+    this._keepaliveInterval = setInterval(() => {
+      // An older store extension may answer with "Unknown method" - that
+      // error is still received WebSocket traffic, so it still does its job;
+      // ignore it either way.
+      this._extensionConnection?.send('session.ping', []).catch(() => {});
+    }, 20_000);
+  }
+
+  private _stopKeepalive(): void {
+    if (this._keepaliveInterval) {
+      clearInterval(this._keepaliveInterval);
+      this._keepaliveInterval = null;
+    }
   }
 
   private async _handlePlaywrightMessage(message: CDPCommand): Promise<void> {

@@ -34,11 +34,43 @@ const SRC_DIR = path.join(ROOT, 'packages', 'playwright-core', 'src');
 const ENTRY = path.join(ROOT, 'packages', 'playwright-core', 'lib', 'entry', 'mcp.js');
 const STAMP_FILE = path.join(__dirname, '.build-stamp');
 const LOCK_DIR = path.join(__dirname, '.build-lock');
+const LOG_FILE = path.join(__dirname, '.mcp-debug-log.txt');
+const LOG_FILE_OLD = path.join(__dirname, '.mcp-debug-log.old.txt');
+const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 
 const NPX_FALLBACK_ARGS = ['-y', '@playwright/mcp@0.0.78'];
 
 function log(message) {
   process.stderr.write(`[run-mcp-server] ${message}\n`);
+}
+
+function rotateLogIfNeeded() {
+  try {
+    if (fs.statSync(LOG_FILE).size > LOG_ROTATE_BYTES)
+      fs.renameSync(LOG_FILE, LOG_FILE_OLD);
+  } catch {
+    // Log file doesn't exist yet - nothing to rotate.
+  }
+}
+
+// The `debug` package writes to stderr; the MCP protocol itself uses stdout,
+// so teeing stderr to a file never touches the handshake.
+function teeStderrToFile(stream) {
+  const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+  let buffer = '';
+  stream.on('data', chunk => {
+    process.stderr.write(chunk);
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines)
+      logStream.write(`[${new Date().toISOString()}] ${line}\n`);
+  });
+  stream.on('end', () => {
+    if (buffer)
+      logStream.write(`[${new Date().toISOString()}] ${buffer}\n`);
+    logStream.end();
+  });
 }
 
 function latestMtimeUnder(dir) {
@@ -119,7 +151,14 @@ function triggerBackgroundBuild() {
 }
 
 function runAndExit(command, args, options) {
-  const child = spawn(command, args, { stdio: 'inherit', ...options });
+  rotateLogIfNeeded();
+  const env = {
+    ...process.env,
+    ...(options.env || {}),
+    DEBUG: process.env.DEBUG ? `${process.env.DEBUG},pw:mcp:*` : 'pw:mcp:*',
+  };
+  const child = spawn(command, args, { stdio: ['inherit', 'inherit', 'pipe'], ...options, env });
+  teeStderrToFile(child.stderr);
   child.on('exit', (code, signal) => {
     if (signal)
       process.kill(process.pid, signal);

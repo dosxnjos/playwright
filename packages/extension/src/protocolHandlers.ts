@@ -145,6 +145,11 @@ export class ProtocolV2Handler implements ProtocolHandler {
       await this._context.setGroupLabel(label);
       return {};
     }
+    if (message.method === 'session.ping') {
+      // No-op: the round trip itself is what resets the MV3 service worker's
+      // idle timer - see the relay-side keepalive in cdpRelay.ts.
+      return {};
+    }
     if (ALLOWED_CHROME_COMMANDS.has(message.method)) {
       const args = (message.params ?? []) as any[];
       const result = await invokeChromeMethod(message.method, args);

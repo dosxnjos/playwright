@@ -116,6 +116,14 @@ export type ExtensionSessionCommand = {
     params: [label: string];
     result: void;
   };
+  // Keepalive: the relay pings the extension periodically so the MV3 service
+  // worker (which owns this WebSocket) never sits idle long enough to be
+  // shut down by Chrome - see microsoft/playwright#41843. No-op on the
+  // extension side; the round trip itself is what resets the idle timer.
+  'session.ping': {
+    params: [];
+    result: {};
+  };
 };
 
 // Protocol v1: legacy single-tab interface.

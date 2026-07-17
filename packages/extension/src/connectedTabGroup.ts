@@ -25,25 +25,77 @@ export function isNonDebuggableUrl(url: string | undefined): boolean {
   return !!url && NON_DEBUGGABLE_SCHEMES.some(s => url.startsWith(s));
 }
 
+// The extension's own connect page is infrastructure, never a legitimate
+// automation target. A neighboring connection's group can otherwise pick it
+// up (Chrome inserts a new window's tab into the active group) and attach it
+// before its owning connection does, stealing the debugger and leaving the
+// owning connection's model empty - see microsoft/playwright#41843.
+export function isOwnConnectPage(url: string | undefined): boolean {
+  return !!url && url.startsWith(chrome.runtime.getURL('connect.html'));
+}
+
 // Who a tab "belongs to" when its connection closes: agent-owned tabs get
 // closed (the agent created them, so leaving them open is a leak); user-owned
 // tabs only get ungrouped (closing a tab the user brought in themselves would
 // be destructive). See ConnectedTabGroup's ownership comment for the rules.
 export type TabOwner = 'agent' | 'user';
 
-// Ungroups any Playwright-titled groups left behind by a prior service worker.
-// Titles now vary per connection (`Playwright · <clientName>`, see
+// Ownership survives a service worker restart (chrome.storage.session persists
+// across MV3 worker deaths, and zeroes on browser restart - exactly the window
+// a worker can die and come back in while groups are still open) so
+// `cleanupStalePlaywrightGroups` can tell, after a cold start, which tabs in a
+// leftover group were agent-created vs. the user's own - see
+// microsoft/playwright#41843.
+type PwGroupsStorage = { [groupId: number]: { agentOwned: number[] } };
+const PW_GROUPS_STORAGE_KEY = 'pwGroups';
+
+async function readPwGroups(): Promise<PwGroupsStorage> {
+  const result = await chrome.storage.session.get(PW_GROUPS_STORAGE_KEY);
+  return (result[PW_GROUPS_STORAGE_KEY] as PwGroupsStorage | undefined) ?? {};
+}
+
+async function writePwGroups(map: PwGroupsStorage): Promise<void> {
+  await chrome.storage.session.set({ [PW_GROUPS_STORAGE_KEY]: map });
+}
+
+// Reconciles leftover Playwright-titled groups from a prior service worker.
+// Titles vary per connection (`Playwright · <clientName>`, see
 // PlaywrightExtension._reserveGroupTitle), so match by prefix instead of the
 // old exact-title query — chrome.tabGroups.query({title}) does not support
-// patterns, so we query all groups and filter here.
+// patterns, so we query all groups and filter here. Tabs recorded as
+// agent-owned (persisted by the connection that's now gone) get closed;
+// everything else - including groups with no persisted entry at all, e.g. a
+// worker restart that predates this instrumentation - falls back to the
+// original behavior of just ungrouping, since closing a user's own tab
+// without that record would be destructive.
 export async function cleanupStalePlaywrightGroups(): Promise<void> {
   try {
     const groups = await chrome.tabGroups.query({});
     const staleGroups = groups.filter(g => g.title?.startsWith(PLAYWRIGHT_GROUP_TITLE));
+    if (!staleGroups.length)
+      return;
+    const pwGroups = await readPwGroups();
     const tabsPerGroup = await Promise.all(staleGroups.map(g => chrome.tabs.query({ groupId: g.id })));
-    const tabIds = tabsPerGroup.flat().map(t => t.id).filter((id): id is number => id !== undefined);
-    if (tabIds.length)
-      await chrome.tabs.ungroup(tabIds as [number, ...number[]]);
+    const toUngroup: number[] = [];
+    const toClose: number[] = [];
+    for (let i = 0; i < staleGroups.length; i++) {
+      const groupId = staleGroups[i].id;
+      const agentOwned = new Set(pwGroups[groupId]?.agentOwned ?? []);
+      for (const tab of tabsPerGroup[i]) {
+        if (tab.id === undefined)
+          continue;
+        if (agentOwned.has(tab.id))
+          toClose.push(tab.id);
+        else
+          toUngroup.push(tab.id);
+      }
+      delete pwGroups[groupId];
+    }
+    if (toUngroup.length)
+      await chrome.tabs.ungroup(toUngroup as [number, ...number[]]);
+    if (toClose.length)
+      await chrome.tabs.remove(toClose).catch(() => {});
+    await writePwGroups(pwGroups);
   } catch (error: any) {
     debugLog('Error cleaning up stale groups:', error);
   }
@@ -142,7 +194,7 @@ export class ConnectedTabGroup {
     // Chrome resets per-tab badge state on navigation, so re-apply it.
     if (this._connection.attachedTabs.has(tabId))
       void this._updateBadge(tabId, CONNECTED_BADGE);
-    else if (this._groupTabIds.has(tabId) && !isNonDebuggableUrl(changeInfo.url))
+    else if (this._groupTabIds.has(tabId) && !isNonDebuggableUrl(changeInfo.url) && !isOwnConnectPage(changeInfo.url))
       this._connection.attachTab(tab);
   }
 
@@ -168,7 +220,7 @@ export class ConnectedTabGroup {
       this._pendingOwner.delete(tabId);
       if (owner === 'agent')
         this._agentOwnedTabs.add(tabId);
-      if (!isNonDebuggableUrl(tab.url))
+      if (!isNonDebuggableUrl(tab.url) && !isOwnConnectPage(tab.url))
         this._connection.attachTab(tab);
     } else {
       this._groupTabIds.delete(tabId);
@@ -176,12 +228,14 @@ export class ConnectedTabGroup {
       if (this._connection.attachedTabs.has(tabId))
         this._connection.detachTab(tabId);
     }
+    void this._persistOwnership();
   }
 
   private _onTabRemoved(tabId: number): void {
     this._groupTabIds.delete(tabId);
     this._agentOwnedTabs.delete(tabId);
     this._pendingOwner.delete(tabId);
+    void this._persistOwnership();
   }
 
   // A relay-initiated attach (popup, `browser_tabs new`, `Target.createTarget`)
@@ -198,11 +252,34 @@ export class ConnectedTabGroup {
     void this._addTabToGroup(tabId);
   }
 
-  // The debugger detached (drag-out, tab close, or external action). Clear the
-  // badge but leave the tab in the group — the user's intent is still there,
-  // and a subsequent navigation will re-attach via _onTabUpdated.
-  private _onTabDetached(tabId: number): void {
+  // The debugger detached (drag-out, tab close, or external action). Usually
+  // this is transient: clear the badge and leave the tab in the group, since a
+  // subsequent navigation will re-attach via _onTabUpdated. But chrome.debugger
+  // can never attach to non-debuggable URLs (chrome://, edge://, devtools://)
+  // — if that's why this tab detached, no future navigation fixes it on its
+  // own, so it would otherwise sit in the group permanently attached-but-dead.
+  // Close it outright rather than just ungrouping, regardless of ownership:
+  // whatever content the tab held before is already gone (overwritten by the
+  // navigation that caused this), so there's nothing left to preserve by
+  // leaving it open loose in the browser.
+  private async _onTabDetached(tabId: number): Promise<void> {
     void this._updateBadge(tabId, { text: '' });
+    if (!this._groupTabIds.has(tabId))
+      return;
+    let tab: chrome.tabs.Tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      return; // Already gone - _onTabRemoved handles that.
+    }
+    if (!isNonDebuggableUrl(tab.url))
+      return;
+    this._groupTabIds.delete(tabId);
+    this._agentOwnedTabs.delete(tabId);
+    void this._persistOwnership();
+    await this._retryOnDrag(() => chrome.tabs.remove([tabId])).catch(error => {
+      debugLog('Error closing dead (non-debuggable) tab:', error);
+    });
   }
 
   // Agent-owned tabs (created by the agent — seed via token/newTab, popups,
@@ -220,6 +297,7 @@ export class ConnectedTabGroup {
     this._groupTabIds.clear();
     this._agentOwnedTabs.clear();
     this._pendingOwner.clear();
+    void this._clearPersistedOwnership();
     if (userOwnedTabs.length) {
       this._retryOnDrag(() => chrome.tabs.ungroup(userOwnedTabs as [number, ...number[]])).catch(error => {
         debugLog('Error ungrouping tabs on close:', error);
@@ -231,6 +309,34 @@ export class ConnectedTabGroup {
       });
     }
     this.onclose?.();
+  }
+
+  // Mirrors `_agentOwnedTabs` into chrome.storage.session, keyed by this
+  // connection's group id, so `cleanupStalePlaywrightGroups` can tell agent-
+  // owned tabs from user-owned ones after a service worker restart drops all
+  // in-memory state. No-op before the group exists (`_groupId` still null).
+  private async _persistOwnership(): Promise<void> {
+    if (this._groupId === null)
+      return;
+    try {
+      const pwGroups = await readPwGroups();
+      pwGroups[this._groupId] = { agentOwned: [...this._agentOwnedTabs] };
+      await writePwGroups(pwGroups);
+    } catch (error: any) {
+      debugLog('Error persisting tab ownership:', error);
+    }
+  }
+
+  private async _clearPersistedOwnership(): Promise<void> {
+    if (this._groupId === null)
+      return;
+    try {
+      const pwGroups = await readPwGroups();
+      delete pwGroups[this._groupId];
+      await writePwGroups(pwGroups);
+    } catch (error: any) {
+      debugLog('Error clearing persisted tab ownership:', error);
+    }
   }
 
   private async _updateBadge(tabId: number, { text, color, title }: { text: string; color?: string, title?: string }): Promise<void> {

@@ -45,4 +45,5 @@ playwright.env
 /scripts/.build-stamp
 /scripts/.build-lock
 /scripts/.build-log.txt
+/scripts/.mcp-debug-log*
 /temp/
