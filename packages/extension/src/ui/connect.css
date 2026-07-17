@@ -14,25 +14,142 @@
   limitations under the License.
 */
 
+/*
+  Shared stylesheet for connect.html and status.html - the two pages the
+  extension shows for its own UI (as opposed to the pages it automates).
+
+  Visual concept: a stage kept dark except for one lit point - real theaters
+  leave a single "ghost light" on an empty stage overnight so no one walks
+  into the dark. That's exactly this page's job: it exists so the user isn't
+  handing a client full control of their browser blind. The dot in
+  `.stage-mark` is that light - green while watching/connected, amber for a
+  warning, red for an error - and `--spotlight` (Playwright's own green,
+  already used for the tab group color in connectedTabGroup.ts) is its color.
+*/
+
+:root {
+  color-scheme: dark;
+
+  --curtain: #0e1113;
+  --curtain-raised: #16191c;
+  --curtain-line: #262b2f;
+  --marquee: #f2f4f5;
+  --marquee-dim: #8b959e;
+
+  --spotlight: #2ead33;
+  --spotlight-glow: rgba(46, 173, 51, .45);
+  --spotlight-bg: rgba(46, 173, 51, .1);
+
+  --footlight: #e8ac3c;
+  --footlight-bg: rgba(232, 172, 60, .12);
+  --footlight-line: rgba(232, 172, 60, .35);
+
+  --velvet: #e0665c;
+  --velvet-bg: rgba(224, 102, 92, .12);
+  --velvet-line: rgba(224, 102, 92, .35);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --curtain: #faf9f7;
+    --curtain-raised: #ffffff;
+    --curtain-line: #e4e2de;
+    --marquee: #1a1d1f;
+    --marquee-dim: #6b7278;
+
+    --spotlight: #1f8a24;
+    --spotlight-glow: rgba(31, 138, 36, .35);
+    --spotlight-bg: rgba(31, 138, 36, .08);
+
+    --footlight: #9a6a16;
+    --footlight-bg: #fdf3e0;
+    --footlight-line: #f0d8a8;
+
+    --velvet: #c0392f;
+    --velvet-bg: #fbe9e7;
+    --velvet-line: #f0c4bd;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   padding: 0;
+  background-color: var(--curtain);
 }
 
-/* Base styles */
 .app-container {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  background-color: #ffffff;
-  color: #1f2328;
+  font-family: var(--font-sans);
+  background-color: var(--curtain);
+  color: var(--marquee);
   margin: 0;
-  padding: 16px;
+  padding: 40px 16px;
   min-height: 100vh;
   font-size: 14px;
+  line-height: 1.5;
 }
 
 .content-wrapper {
-  max-width: 600px;
+  max-width: 560px;
   margin: 0 auto;
+  background-color: var(--curtain-raised);
+  border: 1px solid var(--curtain-line);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+/* The ghost light: one lit point, kept burning while this connection exists. */
+.stage-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--marquee-dim);
+  margin-bottom: 18px;
+}
+
+.ghost-light {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--spotlight);
+  box-shadow: 0 0 0 3px var(--spotlight-glow), 0 0 12px 2px var(--spotlight-glow);
+  flex-shrink: 0;
+}
+
+.ghost-light.connecting {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+.ghost-light.error {
+  background: var(--velvet);
+  box-shadow: 0 0 0 3px var(--velvet-line), 0 0 12px 2px var(--velvet-line);
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ghost-light.connecting {
+    animation: none;
+  }
 }
 
 /* Status Banner */
@@ -44,47 +161,41 @@ body {
 }
 
 .status-banner {
-  padding: 12px;
+  padding: 12px 14px;
   font-size: 14px;
   font-weight: 500;
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
+  border-radius: var(--radius-sm);
 }
 
 .status-banner.connected {
-  color: #1f2328;
-}
-
-.status-banner.connected::before {
-  content: "\2705";
-  margin-right: 8px;
+  color: var(--spotlight);
+  background: var(--spotlight-bg);
 }
 
 .status-banner.error {
-  color: #1f2328;
-}
-
-.status-banner.error::before {
-  content: "\274C";
-  margin-right: 8px;
+  color: var(--velvet);
+  background: var(--velvet-bg);
 }
 
 /* Warning banner */
 .warning-banner {
   margin: 0 0 16px 0;
-  padding: 12px;
-  background-color: #fff8e1;
-  border: 1px solid #f0c674;
-  border-radius: 6px;
+  padding: 12px 14px;
+  background-color: var(--footlight-bg);
+  border: 1px solid var(--footlight-line);
+  border-radius: var(--radius-sm);
   font-size: 13px;
   line-height: 1.5;
-  color: #5c4408;
+  color: var(--marquee);
 }
 
 .warning-banner strong {
-  color: #1f2328;
+  color: var(--footlight);
+  font-weight: 600;
 }
 
 /* Buttons */
@@ -96,62 +207,72 @@ body {
 
 .button {
   padding: 8px 16px;
-  border-radius: 6px;
-  border: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
+  font-family: var(--font-sans);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   text-decoration: none;
   min-width: 90px;
+  transition: background-color .15s ease, border-color .15s ease, filter .15s ease;
 }
 
 .button.primary {
-  background-color: #f8f9fa;
-  color: #3c4043;
-  border: 1px solid #dadce0;
+  background-color: var(--spotlight);
+  color: #06210a;
 }
 
 .button.primary:hover {
-  background-color: #f1f3f4;
-  border-color: #dadce0;
-  box-shadow: 0 1px 2px 0 rgba(60,64,67,.1);
+  filter: brightness(1.1);
 }
 
 .button.default {
-  background-color: #f6f8fa;
-  color: #24292f;
+  background-color: transparent;
+  color: var(--marquee);
+  border-color: var(--curtain-line);
 }
 
 .button.default:hover {
-  background-color: #f3f4f6;
+  background-color: var(--curtain-line);
 }
 
 .button.reject {
-  background-color: #da3633;
-  color: #ffffff;
-  border: 1px solid #da3633;
+  background-color: transparent;
+  color: var(--velvet);
+  border-color: var(--velvet-line);
 }
 
 .button.reject:hover {
-  background-color: #c73836;
-  border-color: #c73836;
+  background-color: var(--velvet-bg);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--spotlight);
+  outline-offset: 2px;
 }
 
 /* One block per active connection on the status page (multiple simultaneous
-   clients each get their own header + tab list). */
+   clients each get their own header + tab list), separated by a taut hairline
+   rather than a hard border - the same "thin lit line" idea as the ghost
+   light, just horizontal. */
 .connection-section {
   margin-bottom: 20px;
   padding-bottom: 20px;
-  border-bottom: 1px solid #d0d7de;
+  position: relative;
 }
 
-.connection-section:last-of-type {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
+.connection-section:not(:last-of-type)::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--curtain-line) 12%, var(--curtain-line) 88%, transparent);
 }
 
 /* Connection header */
@@ -160,46 +281,48 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 12px;
+  padding: 0 2px;
   margin-bottom: 16px;
 }
 
 .client-info {
   font-size: 14px;
-  color: #1f2328;
+  font-family: var(--font-mono);
+  color: var(--marquee);
 }
 
 /* Tab selection */
 .tab-section-title {
-  padding-left: 12px;
+  padding-left: 2px;
   font-size: 12px;
   font-weight: 400;
   margin-bottom: 12px;
-  color: #656d76;
+  color: var(--marquee-dim);
 }
 
 .tab-item {
   display: flex;
   align-items: center;
-  padding: 12px 0 12px 12px;
-  margin-bottom: 8px;
-  background-color: #ffffff;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background-color: transparent;
   cursor: pointer;
-  border-radius: 6px;
-  transition: background-color 0.2s ease;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: background-color .15s ease, border-color .15s ease;
 }
 
 .tab-item:hover {
-  background-color: #f8f9fa;
+  background-color: var(--curtain-line);
 }
 
 .tab-item.selected {
-  background-color: #f6f8fa;
+  border-color: var(--spotlight);
 }
 
 .tab-item.disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: .5;
 }
 
 .tab-radio {
@@ -210,7 +333,8 @@ body {
 .tab-favicon {
   width: 16px;
   height: 16px;
-  margin-right: 8px;
+  margin-right: 10px;
+  border-radius: 3px;
   flex-shrink: 0;
 }
 
@@ -220,8 +344,8 @@ body {
 }
 
 .tab-title {
-  font-weight: 500;
-  color: #1f2328;
+  font-weight: 600;
+  color: var(--marquee);
   margin-bottom: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -230,7 +354,8 @@ body {
 
 .tab-url {
   font-size: 12px;
-  color: #656d76;
+  font-family: var(--font-mono);
+  color: var(--marquee-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -240,65 +365,14 @@ body {
 .link-button {
   background: none;
   border: none;
-  color: #0066cc;
+  color: var(--spotlight);
   text-decoration: underline;
   cursor: pointer;
   padding: 0;
   font: inherit;
 }
 
-/* Auth token section */
-.auth-token-section {
-  margin: 16px 0;
-  padding: 12px;
-  background-color: #f6f8fa;
-  border-radius: 6px;
-}
-
-.auth-token-description {
-  font-size: 12px;
-  color: #656d76;
-  margin-bottom: 12px;
-}
-
-.auth-token-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background-color: #ffffff;
-  padding: 8px;
-}
-
-.auth-token-code {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 12px;
-  color: #1f2328;
-  border: none;
-  flex: 1;
-  padding: 0;
-  word-break: break-all;
-}
-
-.auth-token-refresh {
-  flex: none;
-  height: 24px;
-  width: 24px;
-  border: none;
-  outline: none;
-  color: var(--color-fg-muted);
-  background: transparent;
-  padding: 4px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-}
-
-.auth-token-refresh svg {
-  margin: 0;
-}
-
-.auth-token-refresh:not(:disabled):hover {
-  background-color: var(--color-btn-selected-bg);
+.link-button:focus-visible {
+  outline: 2px solid var(--spotlight);
+  outline-offset: 2px;
 }

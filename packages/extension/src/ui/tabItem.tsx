@@ -43,7 +43,7 @@ export const TabItem: React.FC<TabItemProps> = ({
   return (
     <div className='tab-item' onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>
       <img
-        src={tab.favIconUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="%23f6f8fa"/></svg>'}
+        src={tab.favIconUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="%238b959e" fill-opacity="0.35"/></svg>'}
         alt=''
         className='tab-favicon'
       />

@@ -66,17 +66,12 @@ async function connectViaToken(
   const [, token] = tokenText?.split('=') || [];
   await statusPage.close();
 
-  // KNOWN ISSUE (16/07 investigation): the token-bypass path deterministically
-  // reports clientName as "unknown" instead of the name passed to startClient
-  // — confirmed via [PWDEBUG] logging that it's wrong from this connection's
-  // very first _connectTab call, and a 500ms post-connect delay did not
-  // change the outcome (ruled out as a client.connect()/ping() vs.
-  // notifications/initialized timing race). Root cause not yet found; it
-  // reproduces the same way whether or not a clientName is even passed here.
-  // This is upstream server behavior (clientInfo plumbing in
-  // utils/mcp/server.ts / extensionContextFactory.ts), out of this fork's
-  // scope (D1: no server changes) — tests using this helper must expect
-  // 'unknown', not the clientName argument, for this connection's identity.
+  // FIXED (17/07): this used to deterministically report clientName as
+  // "unknown" here, misdiagnosed on 16/07 as an upstream server/SDK timing
+  // issue (D1, marked out of scope). Root cause was actually local: a stale
+  // React closure in connect.tsx's handleConnectToTab, which read `clientInfo`
+  // state instead of the freshly-parsed name when called synchronously from
+  // the token-bypass path. See the comment at that call site.
   const { client } = await startClient({
     clientName,
     args: ['--extension'],
@@ -97,11 +92,7 @@ test.describe(() => {
     server.setContent('/second', '<title>Second</title><body>Second content</body>', 'text/html');
     const browserContext = await browserWithExtension.launch();
 
-    // Agent A connects via the token bypass — agent-owned seed tab. Its
-    // group ends up titled "Playwright · unknown", not "Playwright · Agent
-    // A" — see the KNOWN ISSUE comment on connectViaToken. Tracking the
-    // group title is still what proves A and B don't collide/steal from
-    // each other, which is this test's actual point.
+    // Agent A connects via the token bypass — agent-owned seed tab.
     const clientA = await connectViaToken(browserContext, startClient, browserWithExtension, 'Agent A');
     const navA = await clientA.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
     expect(navA).toHaveResponse({ snapshot: expect.stringContaining('Hello, world!') });
@@ -128,8 +119,8 @@ test.describe(() => {
           .sort((a: any, b: any) => a.title.localeCompare(b.title));
     });
     expect(groups).toEqual([
+      { color: 'green', title: 'Playwright · Agent A' },
       { color: 'green', title: 'Playwright · Agent B' },
-      { color: 'green', title: 'Playwright · unknown' },
     ]);
 
     await clientA.close();
@@ -276,7 +267,8 @@ test.describe(() => {
     // userOwnedTabs instead of agentOwnedTabs — the pending-owner entry set
     // in ConnectedTabGroup's constructor isn't being consumed by
     // _onTabGroupChanged for this specific tab. Distinct from the clientName
-    // "unknown" issue on connectViaToken (that one's cosmetic/upstream; this
+    // "unknown" issue that used to affect connectViaToken (that one was fixed
+    // 17/07 - a stale React closure in connect.tsx, see its own comment); this
     // one is a real gap in this fork's own ownership tracking, scoped to the
     // token-bypass seed specifically — the picker-seed and mid-session
     // agent-created-tab cases both pass their equivalent assertions).

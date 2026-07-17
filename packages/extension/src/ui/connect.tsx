@@ -59,9 +59,10 @@ const ConnectApp: React.FC = () => {
         return;
       }
 
+      let info = 'unknown';
       try {
         const client = JSON.parse(params.get('client') || '{}');
-        const info = `${client.name || 'unknown'}`;
+        info = `${client.name || 'unknown'}`;
         setClientInfo(info);
         setStatus({
           type: 'connecting',
@@ -97,7 +98,15 @@ const ConnectApp: React.FC = () => {
       const expectedToken = getOrCreateAuthToken();
       const token = params.get('token');
       if (token === expectedToken) {
-        await handleConnectToTab();
+        // Pass `info` explicitly rather than relying on `handleConnectToTab`'s
+        // closure over the `clientInfo` state: this call happens synchronously
+        // within this same effect run, right after `setClientInfo(info)` above
+        // - which only *schedules* the state update, so the callback captured
+        // at mount would still see the initial 'unknown' value, not `info`.
+        // The tab-picker click path doesn't need this - by the time the user
+        // can click a tab, the list has already rendered, which only happens
+        // after the state update above has landed.
+        await handleConnectToTab(undefined, info);
         return;
       }
       if (token) {
@@ -128,28 +137,34 @@ const ConnectApp: React.FC = () => {
       setStatus({ type: 'error', message: 'Failed to load tabs: ' + response.error });
   }, []);
 
-  const handleConnectToTab = useCallback(async (tab?: chrome.tabs.Tab) => {
+  // `clientNameOverride` lets a caller in the middle of the same effect run
+  // (the token-bypass path in the effect below) pass a freshly-computed name
+  // directly, bypassing the `clientInfo` state closure - see the call site
+  // for why that closure can be stale. Callers that fire after a render (the
+  // tab-picker click) can rely on `clientInfo` state as before.
+  const handleConnectToTab = useCallback(async (tab?: chrome.tabs.Tab, clientNameOverride?: string) => {
     setShowTabList(false);
+    const name = clientNameOverride ?? clientInfo;
 
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'connectToTab',
         tab,
-        clientName: clientInfo,
+        clientName: name,
       });
 
       if (response?.success) {
-        setStatus({ type: 'connected', message: `"${clientInfo}" connected.` });
+        setStatus({ type: 'connected', message: `"${name}" connected.` });
       } else {
         setStatus({
           type: 'error',
-          message: response?.error || `"${clientInfo}" failed to connect.`
+          message: response?.error || `"${name}" failed to connect.`
         });
       }
     } catch (e) {
       setStatus({
         type: 'error',
-        message: `"${clientInfo}" failed to connect: ${e}`
+        message: `"${name}" failed to connect: ${e}`
       });
     }
   }, [clientInfo]);
@@ -167,9 +182,16 @@ const ConnectApp: React.FC = () => {
     };
   }, [setError]);
 
+  const lightState = status?.type === 'connected' ? 'connected' : status?.type === 'error' ? 'error' : 'connecting';
+
   return (
     <div className='app-container'>
       <div className='content-wrapper'>
+        <div className='stage-mark'>
+          <span className={`ghost-light ${lightState}`} />
+          Playwright Extension
+        </div>
+
         {status && (
           <div className='status-container'>
             <StatusBanner status={status} />

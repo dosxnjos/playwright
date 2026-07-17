@@ -20,7 +20,7 @@
   width: 24px;
   border: none;
   outline: none;
-  color: var(--color-fg-muted);
+  color: var(--marquee-dim);
   background: transparent;
   padding: 4px;
   cursor: pointer;
@@ -35,5 +35,5 @@
 }
 
 .copy-icon:not(:disabled):hover {
-  background-color: var(--color-btn-selected-bg);
+  background-color: var(--curtain-line);
 }
