@@ -223,7 +223,7 @@ body {
 
 .button.primary {
   background-color: var(--spotlight);
-  color: #06210a;
+  color: #000000;
 }
 
 .button.primary:hover {
