@@ -40,6 +40,14 @@
   --spotlight-glow: rgba(46, 173, 51, .45);
   --spotlight-bg: rgba(46, 173, 51, .1);
 
+  /* The primary button's own fill + text pair - independent of --spotlight
+     above (which is tuned for text-on-card contrast: ghost light, link,
+     banner). Dark theme keeps the vibrant brand green with black text
+     (7.14:1); the light override below darkens the same hue and switches to
+     white text instead, since black-on-vibrant-green read poorly there. */
+  --button-primary-bg: #2ead33;
+  --button-primary-fg: #000000;
+
   --footlight: #e8ac3c;
   --footlight-bg: rgba(232, 172, 60, .12);
   --footlight-line: rgba(232, 172, 60, .35);
@@ -68,6 +76,9 @@
     --spotlight: #1f8a24;
     --spotlight-glow: rgba(31, 138, 36, .35);
     --spotlight-bg: rgba(31, 138, 36, .08);
+
+    --button-primary-bg: #1c7a20;
+    --button-primary-fg: #ffffff;
 
     --footlight: #9a6a16;
     --footlight-bg: #fdf3e0;
@@ -222,8 +233,8 @@ body {
 }
 
 .button.primary {
-  background-color: var(--spotlight);
-  color: #000000;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-fg);
 }
 
 .button.primary:hover {
