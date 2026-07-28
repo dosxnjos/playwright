@@ -164,6 +164,10 @@ connection steal the browser from the previous one. Full plan, decisions and pha
 progress: `C:\Dev\roadmap\2026-07-16-playwright-extension-multiconexao.md` (not versioned here,
 lives in the Nomura dev-diretrizes repo).
 
+**Project memory/decisions:** `C:\Dev\cerebro\projetos\playwright.md` (local
+to this machine — read before non-trivial decisions: open items, recent
+decisions).
+
 ### What changed (packages/extension/)
 
 - `background.ts`: `_activeGroup`/`_activeClientName` (singular) → `_connections: Map<selectorTabId,
