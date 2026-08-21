@@ -132,8 +132,37 @@ function runAndExit(command, args, options) {
   });
 }
 
+// Sessions opened BY an AI (central's maestro/board executors) export
+// CENTRAL_ORIGEM="ia:<route>" (see C:\Dev\CLAUDE.md, "sessão iniciada por IA").
+// Those sessions must never depend on the Chrome extension: overnight there is
+// nobody/no browser to accept the connection, and the first tool call hangs
+// silently until Claude Code's 1800s MCP idle timeout (measured 2026-08-21,
+// two maestro rounds lost). For them, swap extension mode for a local isolated
+// headless chromium; --isolated is required because concurrent AI sessions
+// sharing one persistent profile would collide on chromium's ProcessSingleton.
+// Human sessions (no marker, or "humano:*") keep the argv untouched.
+function argvForAiSession(argv, origem) {
+  if (!/^ia:/.test(origem || ''))
+    return argv;
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--extension' || argv[i] === '--isolated' || argv[i] === '--headless')
+      continue;
+    if (argv[i] === '--browser') {
+      i++; // skip its value too
+      continue;
+    }
+    out.push(argv[i]);
+  }
+  out.push('--browser', 'chromium', '--isolated', '--headless');
+  return out;
+}
+
 function main() {
-  const argv = process.argv.slice(2);
+  const rawArgv = process.argv.slice(2);
+  const argv = argvForAiSession(rawArgv, process.env.CENTRAL_ORIGEM);
+  if (argv !== rawArgv)
+    log(`CENTRAL_ORIGEM=${process.env.CENTRAL_ORIGEM}: AI-opened session, swapping extension mode for isolated headless chromium`);
   if (isForkStale()) {
     triggerBackgroundBuild();
     // shell: true is required on Windows for the same reason as above (npx
@@ -146,4 +175,7 @@ function main() {
   }
 }
 
-main();
+if (require.main === module)
+  main();
+
+module.exports = { argvForAiSession };
