@@ -158,9 +158,24 @@ function argvForAiSession(argv, origem) {
   return out;
 }
 
+// The argv is not the only way to ask for extension mode: the server also reads
+// PLAYWRIGHT_MCP_EXTENSION from the environment (tools/mcp/config.ts) and merges
+// it into the same `config.extension` that browser_set_group_label keys off. An
+// AI session inheriting that variable would still be asking for the extension we
+// just stripped from its argv - and would get an error on the very first tool
+// call, which is what the chromium mode exists to avoid. Same branch, same rule.
+function envForAiSession(env, origem) {
+  if (!/^ia:/.test(origem || ''))
+    return env;
+  const out = { ...env };
+  delete out.PLAYWRIGHT_MCP_EXTENSION;
+  return out;
+}
+
 function main() {
   const rawArgv = process.argv.slice(2);
   const argv = argvForAiSession(rawArgv, process.env.CENTRAL_ORIGEM);
+  const env = envForAiSession(process.env, process.env.CENTRAL_ORIGEM);
   if (argv !== rawArgv)
     log(`CENTRAL_ORIGEM=${process.env.CENTRAL_ORIGEM}: AI-opened session, swapping extension mode for isolated headless chromium`);
   if (isForkStale()) {
@@ -169,13 +184,13 @@ function main() {
     // is a .cmd shim). argv is whatever ~/.claude.json passes us (e.g.
     // `--extension --browser chrome`) - trusted local config, not
     // attacker-controlled input, so unescaped shell concatenation is fine here.
-    runAndExit('npx', [...NPX_FALLBACK_ARGS, ...argv], { shell: true });
+    runAndExit('npx', [...NPX_FALLBACK_ARGS, ...argv], { shell: true, env });
   } else {
-    runAndExit(process.execPath, [ENTRY, ...argv], {});
+    runAndExit(process.execPath, [ENTRY, ...argv], { env });
   }
 }
 
 if (require.main === module)
   main();
 
-module.exports = { argvForAiSession };
+module.exports = { argvForAiSession, envForAiSession };

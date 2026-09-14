@@ -61,6 +61,11 @@ export type ContextConfig = {
     initScript?: string[];
     initPage?: string[];
   };
+  // Whether the server was started in extension mode. Tools that only make
+  // sense with the extension use it to tell "this session never had an
+  // extension" (no-op) from "extension was requested but no relay arrived"
+  // (misconfiguration worth an error).
+  extension?: boolean;
   skillMode?: boolean;
 };
 

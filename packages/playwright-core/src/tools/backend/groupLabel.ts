@@ -23,7 +23,7 @@ const setGroupLabel = defineTool({
   schema: {
     name: 'browser_set_group_label',
     title: 'Label this session\'s browser tab group',
-    description: 'Set a short custom label for this session\'s browser tab group in the Playwright extension, so the user can tell which task/agent owns which tabs when multiple sessions are connected at once. Call this once, early in a task, when you expect to use the browser - especially if the user is likely running you alongside other Claude Code instances. Only has an effect when connected via --extension; errors otherwise.',
+    description: 'Set a short custom label for this session\'s browser tab group in the Playwright extension, so the user can tell which task/agent owns which tabs when multiple sessions are connected at once. Call this once, early in a task, when you expect to use the browser - especially if the user is likely running you alongside other Claude Code instances. Only has an effect when connected via --extension; a harmless no-op otherwise.',
     inputSchema: z.object({
       label: z.string().min(1).describe('Short label for the tab group, e.g. the task name. Shown as "Playwright · <label>" in the browser; deduped with a (2)/(3) suffix if another active connection already used it.'),
     }),
@@ -32,8 +32,22 @@ const setGroupLabel = defineTool({
 
   handle: async (context, params, response) => {
     const relay = context.extensionRelay();
-    if (!relay)
-      throw new Error('browser_set_group_label only works when connected via --extension');
+    if (!relay) {
+      // --extension was asked for but no relay reached this session: another
+      // browser mode won the precedence in browserFactory (cdpEndpoint or
+      // isolated), or the relay was never wired through. Both are real
+      // misconfigurations - this tool is the first call of a session, so it is
+      // also the earliest place they can surface. Keep failing loudly.
+      if (context.config.extension)
+        throw new Error('browser_set_group_label: --extension was requested, but no extension relay is connected to this session');
+      // No extension mode at all (e.g. --browser chromium --isolated): there is
+      // no tab group to label, so this is a no-op rather than an error. Agents
+      // are told to call this first, before any navigation, and in that
+      // position an error reads as "something broke" and costs a tool call for
+      // nothing.
+      response.addTextResult('No tab group to label: this session is not running with --extension. Continuing without a label.');
+      return;
+    }
     await relay.setGroupLabel(params.label);
     response.addTextResult(`Tab group label set to "${params.label}".`);
   },
