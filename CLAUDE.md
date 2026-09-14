@@ -258,6 +258,32 @@ a build:
   `fs.mkdirSync` lock (`scripts/.build-lock`); whoever doesn't get the lock just uses the
   `npx` fallback for that launch too.
 
+**AI-opened sessions get isolated headless chromium, not the extension (21/08/2026).**
+Sessions opened by an AI (central's maestro/board) export `CENTRAL_ORIGEM="ia:<route>"`;
+the wrapper (`argvForAiSession`) detects that marker and rewrites the argv — drops
+`--extension`/`--browser <x>`, injects `--browser chromium --isolated --headless` — before
+spawning either the fork or the npx fallback. Rationale: overnight there is no Chrome/no
+human to accept the extension connection, so the first tool call used to hang silently for
+1800s (Claude Code's MCP idle timeout), killing the maestro's headless round with it —
+measured on 2026-08-21, two rounds lost (see `C:\Dev\central\ARMADILHAS.md` #62).
+`--isolated` is required: concurrent AI sessions sharing one persistent profile would
+collide on chromium's ProcessSingleton. Human sessions (no marker, or `humano:*`) keep the
+extension argv byte-for-byte. The wrapper also drops `PLAYWRIGHT_MCP_EXTENSION` from an AI
+session's environment: that variable feeds the same `config.extension` the argv rewrite
+just cleared. Both functions are exported (`module.exports`) for unit testing; incident
+plan and discarded alternatives: `C:\Dev\roadmap\2026-08-21-playwright-chromium-sessoes-ia.md`.
+
+**`browser_set_group_label` no-ops outside extension mode (13/09/2026).** It used to throw
+whenever `context.extensionRelay()` was missing, which in chromium mode meant one failed
+tool call per AI session — and it is the tool agents are told to call first. It now keys
+off `config.extension` (new optional field on `ContextConfig`): no extension mode at all →
+no-op with a clear message; `--extension` requested but no relay wired through → still an
+error, because that is a real misconfiguration (`--isolated`/`--cdp-endpoint` silently win
+the precedence in `browserFactory`, and `createConnection({extension: true})` never passes
+a relay) and the first tool call is the cheapest place to surface it. Both branches are
+covered in `tests/mcp/group-label.spec.ts`. Plan, measurements and the adversarial review
+that reshaped it: `roadmap/2026-09-13-melhoria-playwright-headless-arestas.md`.
+
 **To point `~/.claude.json` at it** (same `env` token vault, only `command`/`args` change):
 ```json
 "command": "node",
