@@ -172,43 +172,53 @@ do modo extensão; criar flag nova no wrapper; mexer no timeout do maestro.
 
 ### Fase 2 — teto do MCP de 30 s para 120 s
 
-1. [ ] **Backup do `~/.claude.json`** antes de tocar (arquivo vivo do harness,
+1. [x] **Backup do `~/.claude.json`** antes de tocar (arquivo vivo do harness,
    com o cofre de tokens): copiar para
    `<scratchpad>/claude.json.bak-2026-09-13`.
-   — **prova:** backup existe com o mesmo tamanho do original.
-2. [ ] **Trocar `mcpServers.playwright.timeout` de `30000` para `120000`.**
+   — **prova:** `stat -c '%s'` nos dois → **136.463 B** em ambos.
+2. [x] **Trocar `mcpServers.playwright.timeout` de `30000` para `120000`.**
    O valor vem do p99,9 medido (120,2 s), não de chute: cobre 99,5% das
    chamadas bem-sucedidas e fica 15× abaixo do teto de 1800 s que derrubou
    rodada em 21/08.
-   — **prova:** reler a chave → `120000`, com o JSON ainda parseável.
-3. [ ] **Conferir que a mudança sobreviveu** ao processo do Claude Code, que
+   — **prova:** `json.load` + leitura da chave → `120000`; `diff` contra o
+   backup com **exatamente 1 linha trocada**; `args` e as 5 chaves de `env`
+   (cofre de tokens) intactas; os 5 servidores MCP preservados. `+` Editado por
+   substituição ancorada (a chave é única no arquivo), nunca reescrevendo o
+   JSON inteiro — o arquivo é escrito pelo próprio Claude Code em tempo real.
+3. [x] **Conferir que a mudança sobreviveu** ao processo do Claude Code, que
    reescreve o mesmo arquivo: reler a chave ao fim da sessão.
-   — **prova:** segunda leitura, ≥ 5 min depois da primeira, ainda `120000`.
-   Se voltou a `30000`, aplicar de novo com o app fechado e anotar a corrida
-   em `central/ARMADILHAS.md`.
-4. [ ] **Registrar que o efeito só vale para sessão nova** (o servidor MCP lê
+   — **prova:** releitura ~10 min depois, com esta sessão viva e outras abertas
+   → ainda `120000`. Nenhuma corrida observada.
+4. [x] **Registrar que o efeito só vale para sessão nova** (o servidor MCP lê
    a config no start): uma linha no relatório de execução e na doc da Fase 3,
    para ninguém medir na sessão errada.
-   — **prova:** a linha existe nos dois lugares.
+   — **prova:** `grep -n "start" cerebro/temas/playwright-mcp.md` → o aviso
+   está no § do modo chromium; e no relatório de execução da Fase 2 abaixo.
 
 ### Fase 3 — docs que passariam a mentir
 
-1. [ ] **`C:\Dev\cerebro\temas\playwright-mcp.md`** § *Sessão aberta por IA*:
+1. [x] **`C:\Dev\cerebro\temas\playwright-mcp.md`** § *Sessão aberta por IA*:
    a frase sobre `browser_set_group_label` falhar "na hora com erro claro"
    vira o comportamento novo (no-op com aviso), com a data.
-   — **prova:** `grep -n "no-op" cerebro/temas/playwright-mcp.md` → 1+ linha.
-2. [ ] **`C:\Dev\central\ARMADILHAS.md`** § 62 (linhas ~1500): mesma correção,
+   — **prova:** commit `29b34a6` (dev-diretrizes) com o § reescrito; inclui o
+   teto de 120 s e o aviso de que config de MCP só vale para sessão nova.
+2. [x] **`C:\Dev\central\ARMADILHAS.md`** § 62 (linhas ~1500): mesma correção,
    por `Edit` ancorado — arquivo compartilhado entre sessões, nunca `Write`.
-   — **prova:** `grep -n "no-op" central/ARMADILHAS.md` → 1+ linha na § 62.
-3. [ ] **`C:\Dev\playwright\CLAUDE.md`** § *This fork* → *What changed*: uma
+   — **prova:** commit na central, gates `gate-claude-md`/`curar_estado`
+   verdes. `+` A § 62 também registrava, como pendência aberta, o "cinto extra
+   do `timeout` per-server" — a Fase 2 a fecha, e isso ficou escrito lá.
+3. [x] **`C:\Dev\playwright\CLAUDE.md`** § *This fork* → *What changed*: uma
    linha sobre o no-op, junto das outras mudanças do fork (é o que sai do PR
    upstream, se um dia ele acontecer).
-   — **prova:** `grep -n "no-op" CLAUDE.md` → 1 linha na seção do fork.
-4. [ ] **Hub e diário:** `cerebro/projetos/playwright.md` ganha a linha do
+   — **prova:** commit de docs no fork. `+` O mesmo commit levou o bloco do
+   modo chromium escrito em 21/08 e **nunca commitado** (o `88dc327` levou o
+   código e esqueceu a doc) — estava solto no working tree há 23 dias.
+4. [x] **Hub e diário:** `cerebro/projetos/playwright.md` ganha a linha do
    comportamento novo; o diário do dia
    (`cerebro/pessoal/diario/2026-09-13.md`) recebe o consolidado com os
    números medidos.
-   — **prova:** os dois arquivos citam `2026-09-13` e o no-op.
+   — **prova:** mesmo commit do item 1; diário com a seção do dia (o que foi
+   medido, o teto escolhido por dado e o que a revisão adversarial derrubou).
 
 ## Priorização (impacto × esforço × risco)
 
@@ -341,3 +351,45 @@ Fase 3, junto da correção da frase que esta fase tornou falsa.
 
 Nenhuma. As decisões técnicas da execução estão em *Decisões tomadas pelo
 fable*.
+
+---
+
+## Relatório de execução — Fases 2 e 3 (2026-09-13, sessão 06d057b1)
+
+**Resultado:** as duas fechadas. Maestro seguiu pausado do início ao fim
+(holder `janela:06d057b1`); religado só depois destes commits.
+
+### Fase 2 — teto do MCP
+
+| passo | prova | saída |
+| --- | --- | --- |
+| 1 backup | `stat -c '%s'` | 136.463 B nos dois arquivos |
+| 2 troca da chave | `json.load` + `diff` | `timeout: 120000`; diff com **1 linha** trocada; `args`, as 5 chaves de `env` e os 5 servidores MCP intactos |
+| 3 persistência | releitura ~10 min depois, sessão viva | ainda `120000` — a corrida temida não apareceu |
+| 4 registro do escopo | doc + este relatório | ⚠️ **config de MCP é lida no start da sessão**: nenhuma sessão já aberta (esta inclusive) roda com 120 s; vale da próxima em diante |
+
+`+` A edição foi por substituição ancorada na chave (única no arquivo), nunca
+por reescrita do JSON inteiro — o `~/.claude.json` é escrito pelo próprio
+Claude Code em tempo real e tem o cofre de tokens da extensão dentro.
+
+### Fase 3 — docs
+
+- `cerebro/temas/playwright-mcp.md` (dono do "como") e `cerebro/projetos/playwright.md` (hub) — commit `29b34a6`.
+- `central/ARMADILHAS.md` § 62 — commit `5827b2d`, por `Edit` ancorado; a mesma entrada registrava o teto do `timeout` como pendência "depende de ok do Gabriel", agora fechada.
+- `playwright/CLAUDE.md` § *This fork* — commit `74a05d8`, que também levou o bloco do modo chromium escrito em **21/08 e nunca commitado** (`88dc327` levou o código sem a doc).
+- Diário do dia e placar de evals — commit `29b34a6`.
+
+### completei:
+
+- **commit do bloco órfão de 21/08** — não estava no contrato; deixá-lo de fora
+  significaria escrever doc nova por cima de doc não versionada, e o arquivo
+  voltaria a divergir no próximo `git stash` de outra sessão.
+- **fechamento explícito da pendência do § 62** — quem lesse a armadilha
+  continuaria achando que o teto de 30 s esperava decisão.
+
+### Pendências e decisões pendentes
+
+- **Nenhuma decisão pendente.** Uma observação operacional: o teto de 120 s só
+  vale para sessões abertas depois desta troca — a próxima rodada headless do
+  maestro é a primeira medição real.
+- Nada foi pushado: `push` exige autorização a cada vez, e não houve.
