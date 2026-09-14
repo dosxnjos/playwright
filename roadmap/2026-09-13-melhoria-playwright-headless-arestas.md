@@ -3,7 +3,10 @@
 **Alvo:** fork `C:\Dev\playwright` (tool `browser_set_group_label` + wrapper
 `scripts/run-mcp-server.cjs`) e a config `mcpServers.playwright` do
 `~/.claude.json`.
-**Status:** pronto para execução (Fases 1–3, nesta ordem).
+**Status:** **executado em 13/09/2026** — Fases 1, 2 e 3 fechadas (commits
+`0fb1d48`, `74a05d8`, `3a4842f` no fork; `29b34a6` no dev-diretrizes; `5827b2d`
+na central). Relatórios de execução no fim do arquivo. O § *Alvo e estado
+atual* abaixo é a foto de **antes** da execução, preservada de propósito.
 **Dono da decisão:** fable (tudo aqui é técnico e reversível).
 
 ## Contexto e motivação
