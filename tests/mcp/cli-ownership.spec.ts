@@ -169,6 +169,33 @@ test('close only affects the caller owner', async ({ cli, server }) => {
   expect((await cli('-s', 'close-b', 'goto', server.EMPTY_PAGE, { env: ownerB })).exitCode).toBe(0);
 });
 
+test('closed persistent sessions retain ownership until delete-data', async ({ cli, server, mcpBrowserNormalized }) => {
+  const opened = await cli('-s', 'persistent-data', 'open', server.HELLO_WORLD, '--persistent', { env: ownerA });
+  const daemonDir = await daemonFolder();
+  const registrationFile = path.join(daemonDir!, 'persistent-data.session');
+  const dataDir = path.join(daemonDir!, `ud-persistent-data-${mcpBrowserNormalized}`);
+  expect(fs.existsSync(registrationFile)).toBe(true);
+  expect(fs.existsSync(dataDir)).toBe(true);
+
+  const closed = await cli('-s', 'persistent-data', 'close', { env: ownerA });
+  expect(closed.output).toContain(`Browser 'persistent-data' closed`);
+  await expect.poll(() => isAlive(opened.daemonPid)).toBe(false);
+
+  const registration = JSON.parse(await fs.promises.readFile(registrationFile, 'utf-8'));
+  expect(registration).toEqual(expect.objectContaining({
+    instanceId: expect.any(String),
+    owner: 'A',
+    cli: { persistent: true },
+  }));
+  expectOwnershipFailure(await cli('-s', 'persistent-data', 'delete-data', { env: ownerB }));
+  expect(fs.existsSync(dataDir)).toBe(true);
+
+  const deleted = await cli('-s', 'persistent-data', 'delete-data', { env: ownerA });
+  expect(deleted.output).toContain(`Deleted user data for browser 'persistent-data'.`);
+  expect(fs.existsSync(dataDir)).toBe(false);
+  expect(fs.existsSync(registrationFile)).toBe(false);
+});
+
 test('close-all closes only matching owner sessions and reports skips', async ({ cli, server }) => {
   const a1 = await cli('-s', 'all-a1', 'open', server.HELLO_WORLD, { env: ownerA });
   const a2 = await cli('-s', 'all-a2', 'open', server.HELLO_WORLD, { env: ownerA });

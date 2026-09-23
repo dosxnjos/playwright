@@ -186,7 +186,7 @@ async function deleteSessionFile(clientInfo: ClientInfo, sessionConfig: SessionC
       registeredInstanceId = (value as Record<string, unknown>).instanceId as string;
   } catch {
   }
-  if (registeredInstanceId === sessionConfig.instanceId)
+  if (registeredInstanceId === sessionConfig.instanceId && !sessionConfig.cli.persistent)
     await fs.promises.rm(sessionFile).catch(() => {});
 }
 
