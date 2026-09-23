@@ -1076,7 +1076,7 @@ const sessionList = declareCommand({
 
 const sessionCloseAll = declareCommand({
   name: 'close-all',
-  description: 'Close all browser sessions',
+  description: 'Close browser sessions owned by the caller',
   category: 'browsers',
   toolName: '',
   toolParams: () => ({}),
@@ -1084,7 +1084,7 @@ const sessionCloseAll = declareCommand({
 
 const killAll = declareCommand({
   name: 'kill-all',
-  description: 'Forcefully kill all browser sessions (for stale/zombie processes)',
+  description: 'Last-resort daemon cleanup for unscoped single-user machines',
   category: 'browsers',
   toolName: '',
   toolParams: () => ({}),
