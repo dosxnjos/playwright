@@ -4,11 +4,15 @@
 ../../serverRegistry.ts
 ./channelSessions.ts
 ./minimist.ts
+./ownership.ts
 ./output.ts
 ./session.ts
 ./sessionLock.ts
 ./registry.ts
 ./processUtils.ts
+
+[ownership.ts]
+"strict"
 
 [output.ts]
 "strict"

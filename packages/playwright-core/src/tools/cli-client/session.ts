@@ -155,6 +155,7 @@ export class Session {
       detached: true,
       stdio: ['ignore', 'pipe', err],
       cwd: process.cwd(), // Will be used as root.
+      env: daemonEnvironment(clientInfo.owner),
     });
 
     let signalled = false;
@@ -208,6 +209,15 @@ export class Session {
   async deleteSessionConfig() {
     await fs.promises.rm(this._sessionFile.file).catch(() => {});
   }
+}
+
+function daemonEnvironment(owner: string | undefined): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (owner === undefined)
+    delete env.PLAYWRIGHT_CLI_OWNER;
+  else
+    env.PLAYWRIGHT_CLI_OWNER = owner;
+  return env;
 }
 
 class SocketConnectionClient {

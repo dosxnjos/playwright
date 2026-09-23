@@ -220,6 +220,7 @@ function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browse
     instanceId: crypto.randomUUID(),
     pid: process.pid,
     startedAt: Date.now(),
+    owner: clientInfo.owner,
     workspaceDir: clientInfo.workspaceDir,
     attached: options.ownership === 'attached' ? true : undefined,
     cli: { persistent: options.persistent },

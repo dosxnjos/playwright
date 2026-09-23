@@ -25,6 +25,7 @@ import type * as playwright from '../../..';
 
 export type ClientInfo = {
   version: string;
+  owner: string | undefined;
   workspaceDirHash: string;
   daemonProfilesDir: string;
   workspaceDir: string | undefined;
@@ -43,6 +44,7 @@ export type SessionConfig = {
   instanceId?: string;
   pid?: number;
   startedAt?: number;
+  owner?: string;
   attached?: boolean;
   cli: {
     persistent?: boolean;
@@ -175,11 +177,21 @@ export function createClientInfo(): ClientInfo {
 
   return {
     version,
+    owner: readOwner(),
     workspaceDir,
     workspaceDirHash,
     daemonProfilesDir: daemonProfilesDir(workspaceDirHash),
     homeDir: os.homedir(),
   };
+}
+
+function readOwner(): string | undefined {
+  const owner = process.env.PLAYWRIGHT_CLI_OWNER;
+  if (!owner)
+    return undefined;
+  if (owner.length > 256 || !/^[\x20-\x7e]+$/.test(owner))
+    throw new Error('PLAYWRIGHT_CLI_OWNER must be at most 256 printable ASCII characters');
+  return owner;
 }
 
 function findWorkspaceDir(startDir: string): string | undefined {
