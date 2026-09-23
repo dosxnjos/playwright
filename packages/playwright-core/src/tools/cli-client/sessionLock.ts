@@ -38,8 +38,35 @@ type LockInspection = {
   stale: boolean;
 };
 
+type LockAttempt<T> =
+  { acquired: true, value: T } |
+  { acquired: false };
+
+export class SessionLockTimeoutError extends Error {
+  constructor(readonly sessionName: string, readonly holderPid: number | undefined) {
+    const holder = holderPid === undefined ? 'an unknown process' : `pid ${holderPid}`;
+    super(`Timed out waiting for session '${sessionName}' lifecycle lock held by ${holder}`);
+    this.name = 'SessionLockTimeoutError';
+  }
+}
+
 export async function withSessionLock<T>(clientInfo: ClientInfo, sessionName: string, callback: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionLock(clientInfo, sessionName);
+  return await withSessionLockTimeout(clientInfo, sessionName, lockTimeout(), callback);
+}
+
+export async function withSessionLockIfAvailable<T>(clientInfo: ClientInfo, sessionName: string, callback: () => Promise<T>): Promise<LockAttempt<T>> {
+  try {
+    const value = await withSessionLockTimeout(clientInfo, sessionName, 0, callback);
+    return { acquired: true, value };
+  } catch (error) {
+    if (error instanceof SessionLockTimeoutError)
+      return { acquired: false };
+    throw error;
+  }
+}
+
+async function withSessionLockTimeout<T>(clientInfo: ClientInfo, sessionName: string, timeout: number, callback: () => Promise<T>): Promise<T> {
+  const lock = await acquireSessionLock(clientInfo, sessionName, timeout);
   try {
     return await callback();
   } finally {
@@ -47,11 +74,11 @@ export async function withSessionLock<T>(clientInfo: ClientInfo, sessionName: st
   }
 }
 
-async function acquireSessionLock(clientInfo: ClientInfo, sessionName: string): Promise<{ file: string, nonce: string }> {
+async function acquireSessionLock(clientInfo: ClientInfo, sessionName: string, timeout: number): Promise<{ file: string, nonce: string }> {
   fs.mkdirSync(clientInfo.daemonProfilesDir, { recursive: true });
   const file = path.join(clientInfo.daemonProfilesDir, `${sessionName}.lock`);
   const nonce = crypto.randomUUID();
-  const deadline = Date.now() + lockTimeout();
+  const deadline = Date.now() + timeout;
   let holderPid: number | undefined;
 
   while (true) {
@@ -76,10 +103,8 @@ async function acquireSessionLock(clientInfo: ClientInfo, sessionName: string): 
         continue;
     }
 
-    if (Date.now() >= deadline) {
-      const holder = holderPid === undefined ? 'an unknown process' : `pid ${holderPid}`;
-      throw new Error(`Timed out waiting for session '${sessionName}' lifecycle lock held by ${holder}`);
-    }
+    if (Date.now() >= deadline)
+      throw new SessionLockTimeoutError(sessionName, holderPid);
     await new Promise(resolve => setTimeout(resolve, retryDelay));
   }
 }

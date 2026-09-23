@@ -67,6 +67,55 @@ test('close-all', async ({ cli, server }) => {
   expect(listAfter).not.toContain('session1');
 });
 
+test('close and list do not wait for a running tool command', async ({ cli, server }) => {
+  await cli('open', server.HELLO_WORLD);
+
+  const lockTimeoutMs = 1000;
+  const env = { PWTEST_CLI_SESSION_LOCK_TIMEOUT_MS: String(lockTimeoutMs) };
+  const commandStarted = server.waitForRequest('/command-started');
+  const runningCommand = cli('run-code', `async (page) => {
+    await page.evaluate(() => fetch('/command-started'));
+    await page.waitForTimeout(2000);
+  }`, { env });
+  await commandStarted;
+
+  const closeWithTiming = (async () => {
+    const startedAt = Date.now();
+    const result = await cli('close', { env });
+    return { result, elapsed: Date.now() - startedAt };
+  })();
+  const [listed, closed] = await Promise.all([
+    cli('list', { env }),
+    closeWithTiming,
+    runningCommand,
+  ]);
+
+  expect(listed.exitCode).toBe(0);
+  expect(closed.result.exitCode).toBe(0);
+  expect(closed.result.output).toContain(`Browser 'default' closed`);
+  expect(closed.elapsed).toBeLessThan(750);
+});
+
+test('close-all reports a contended session and continues', async ({ cli, server }) => {
+  await cli('-s', 'a-contended', 'open', server.HELLO_WORLD);
+  await cli('-s', 'z-closable', 'open', server.HELLO_WORLD);
+
+  const daemonDir = await daemonFolder();
+  const lockFile = path.join(daemonDir!, 'a-contended.lock');
+  await fs.promises.writeFile(lockFile, JSON.stringify({ pid: process.pid, createdAt: Date.now(), nonce: 'test-lock' }), { flag: 'wx' });
+  try {
+    const result = await cli('close-all', { env: { PWTEST_CLI_SESSION_LOCK_TIMEOUT_MS: '100' } });
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain(`Skipped locked session: 'a-contended'.`);
+
+    const listed = JSON.parse((await cli('--json', 'list')).output);
+    expect(listed.browsers.map((browser: { name: string }) => browser.name)).toContain('a-contended');
+    expect(listed.browsers.map((browser: { name: string }) => browser.name)).not.toContain('z-closable');
+  } finally {
+    await fs.promises.unlink(lockFile).catch(() => {});
+  }
+});
+
 test('delete-data', async ({ cli, server, mcpBrowserNormalized }) => {
   await cli('open', server.HELLO_WORLD, '--persistent');
 

@@ -27,7 +27,7 @@ import { JsonOutput, TextOutput } from './output';
 import { isPlaywrightDaemonCommand } from './processUtils';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
-import { withSessionLock } from './sessionLock';
+import { SessionLockTimeoutError, withSessionLock, withSessionLockIfAvailable } from './sessionLock';
 import { libPath } from '../../package';
 import { serverRegistry } from '../../serverRegistry';
 import { minimist } from './minimist';
@@ -130,22 +130,29 @@ export async function program(options?: { embedderVersion?: string}) {
     case 'close-all': {
       const entries = registry.entries(clientInfo);
       const closed: string[] = [];
+      const lockContended: string[] = [];
       let skipped = 0;
       for (const entry of entries) {
-        await withSessionLock(clientInfo, entry.config.name, async () => {
-          const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
-          if (!currentEntry)
-            return;
-          const action = sessionOwnershipPolicy(clientInfo.owner, currentEntry.config.owner, 'open', 'close-all');
-          if (action === 'skip') {
-            skipped++;
-            return;
-          }
-          await new Session(currentEntry).stop();
-          closed.push(currentEntry.config.name);
-        });
+        try {
+          await withSessionLock(clientInfo, entry.config.name, async () => {
+            const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
+            if (!currentEntry)
+              return;
+            const action = sessionOwnershipPolicy(clientInfo.owner, currentEntry.config.owner, 'open', 'close-all');
+            if (action === 'skip') {
+              skipped++;
+              return;
+            }
+            await new Session(currentEntry).stop();
+            closed.push(currentEntry.config.name);
+          });
+        } catch (error) {
+          if (!(error instanceof SessionLockTimeoutError))
+            throw error;
+          lockContended.push(entry.config.name);
+        }
       }
-      output.closeAll(closed, clientInfo.owner !== undefined || skipped > 0 ? skipped : undefined);
+      output.closeAll(closed, clientInfo.owner !== undefined || skipped > 0 ? skipped : undefined, lockContended);
       return;
     }
     case 'delete-data': {
@@ -303,7 +310,7 @@ export async function program(options?: { embedderVersion?: string}) {
 }
 
 async function startSession(sessionName: string, clientInfo: ClientInfo, args: MinimistArgs, mode: 'open' | 'attach', initialCommand: MinimistArgs, output: Output) {
-  return await withSessionLock(clientInfo, sessionName, async () => {
+  const { result, newEntry } = await withSessionLock(clientInfo, sessionName, async () => {
     const entry = await Registry.readEntry(clientInfo, sessionName);
     const status = entry ? await new Session(entry).status() : 'none';
     const action = sessionOwnershipPolicy(clientInfo.owner, entry?.config.owner, status, mode);
@@ -317,19 +324,21 @@ async function startSession(sessionName: string, clientInfo: ClientInfo, args: M
     const newEntry = await Registry.readEntry(clientInfo, sessionName);
     if (!newEntry)
       throw new Error(`Could not start the session "${sessionName}"`);
-    const toolText = await runInSessionOrStop(newEntry, clientInfo, initialCommand, output);
-    return { ...result, toolText };
+    return { result, newEntry };
   });
+  const toolText = await runInSessionOrStop(newEntry, clientInfo, initialCommand, output);
+  return { ...result, toolText };
 }
 
 async function runOwnedSession(sessionName: string, clientInfo: ClientInfo, args: MinimistArgs, output: Output): Promise<string> {
-  return await withSessionLock(clientInfo, sessionName, async () => {
+  const entry = await withSessionLock(clientInfo, sessionName, async () => {
     const entry = await Registry.readEntry(clientInfo, sessionName);
     if (!entry)
       output.errorBrowserNotOpenForTool(sessionName);
     assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, entry.config.owner, 'open', 'use'), sessionName, 'use it');
-    return await runInSession(entry, clientInfo, args, output);
+    return entry;
   });
+  return await runInSession(entry, clientInfo, args, output);
 }
 
 function assertAttachTargetOwnership(registry: Registry, callerOwner: string | undefined, target: string): void {
@@ -381,7 +390,12 @@ async function runInSessionOrStop(entry: SessionFile, clientInfo: ClientInfo, ar
   try {
     return await runInSession(entry, clientInfo, args, output);
   } catch (e) {
-    await new Session(entry).stop().catch(() => {});
+    await withSessionLock(clientInfo, entry.config.name, async () => {
+      const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
+      if (!entry.config.instanceId || currentEntry?.config.instanceId !== entry.config.instanceId)
+        return;
+      await new Session(currentEntry).stop();
+    }).catch(() => {});
     throw e;
   }
 }
@@ -488,37 +502,51 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
       continue;
     for (const entry of list) {
       const entryClientInfo = { ...clientInfo, daemonProfilesDir: entry.daemonDir };
-      await withSessionLock(entryClientInfo, entry.config.name, async () => {
-        const currentEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
-        if (!currentEntry)
-          return;
-        const session = new Session(currentEntry);
-        const status = await session.status();
-        const gcAction = sessionOwnershipPolicy(clientInfo.owner, session.config.owner, status, 'list-gc');
-        if (gcAction === 'remove') {
-          await session.deleteSessionConfig();
-          return;
-        }
-        const config = session.config;
-        const channel = config.browser?.launchOptions.channel ?? config.browser?.browserName;
-        browsers.push({
-          name: session.name,
-          workspace: workspaceKey,
-          status,
-          ...(ownershipDetails ? {
-            owner: config.owner ?? null,
-            pid: config.pid ?? null,
-            startedAt: config.startedAt ?? null,
-            ownedByCaller: clientInfo.owner === config.owner,
-          } : {}),
-          browserType: channel,
-          userDataDir: config.browser?.userDataDir ?? null,
-          headed: config.browser ? !config.browser.launchOptions.headless : undefined,
-          persistent: !!config.cli.persistent,
-          attached: !!config.attached,
-          compatible: session.isCompatible(clientInfo),
-          version: config.version,
+      let currentEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+      if (!currentEntry)
+        continue;
+      let session = new Session(currentEntry);
+      let status = await session.status();
+      const gcAction = sessionOwnershipPolicy(clientInfo.owner, session.config.owner, status, 'list-gc');
+      if (gcAction === 'remove') {
+        const attempt = await withSessionLockIfAvailable(entryClientInfo, entry.config.name, async () => {
+          const lockedEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+          if (!lockedEntry)
+            return true;
+          const lockedSession = new Session(lockedEntry);
+          const lockedStatus = await lockedSession.status();
+          if (sessionOwnershipPolicy(clientInfo.owner, lockedSession.config.owner, lockedStatus, 'list-gc') !== 'remove')
+            return false;
+          await lockedSession.deleteSessionConfig();
+          return true;
         });
+        if (attempt.acquired && attempt.value)
+          continue;
+        currentEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+        if (!currentEntry)
+          continue;
+        session = new Session(currentEntry);
+        status = await session.status();
+      }
+      const config = session.config;
+      const channel = config.browser?.launchOptions.channel ?? config.browser?.browserName;
+      browsers.push({
+        name: session.name,
+        workspace: workspaceKey,
+        status,
+        ...(ownershipDetails ? {
+          owner: config.owner ?? null,
+          pid: config.pid ?? null,
+          startedAt: config.startedAt ?? null,
+          ownedByCaller: clientInfo.owner === config.owner,
+        } : {}),
+        browserType: channel,
+        userDataDir: config.browser?.userDataDir ?? null,
+        headed: config.browser ? !config.browser.launchOptions.headless : undefined,
+        persistent: !!config.cli.persistent,
+        attached: !!config.attached,
+        compatible: session.isCompatible(clientInfo),
+        version: config.version,
       });
     }
   }

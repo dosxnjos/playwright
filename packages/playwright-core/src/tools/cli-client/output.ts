@@ -64,7 +64,7 @@ export interface Output {
   errorAttachNoTarget(): never;
 
   list(data: ListData): void;
-  closeAll(sessions: string[], skipped?: number): void;
+  closeAll(sessions: string[], skipped?: number, lockContended?: string[]): void;
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void;
   killAll(pids: number[]): void;
   open(session: string, pid: number | undefined, toolResult: string): void;
@@ -192,9 +192,11 @@ export class TextOutput implements Output {
     }
   }
 
-  closeAll(_sessions: string[], skipped?: number): void {
+  closeAll(_sessions: string[], skipped?: number, lockContended?: string[]): void {
     if (skipped !== undefined)
       console.log(`Skipped ${skipped} session${skipped === 1 ? '' : 's'} owned by another owner.`);
+    if (lockContended?.length)
+      console.log(`Skipped locked session${lockContended.length === 1 ? '' : 's'}: ${lockContended.map(name => `'${name}'`).join(', ')}.`);
   }
 
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void {
@@ -322,8 +324,12 @@ export class JsonOutput implements Output {
     this._emit(payload);
   }
 
-  closeAll(sessions: string[], skipped?: number): void {
-    this._emit({ closed: sessions, ...(skipped !== undefined ? { skipped } : {}) });
+  closeAll(sessions: string[], skipped?: number, lockContended?: string[]): void {
+    this._emit({
+      closed: sessions,
+      ...(skipped !== undefined ? { skipped } : {}),
+      ...(lockContended?.length ? { lockContended } : {}),
+    });
   }
 
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void {
