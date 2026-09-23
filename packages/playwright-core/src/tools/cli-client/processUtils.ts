@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import path from 'path';
+
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0)
     return false;
@@ -23,4 +25,32 @@ export function isProcessAlive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+export function isPlaywrightDaemonCommand(commandLine: string): boolean {
+  const tokens = tokenizeCommandLine(commandLine);
+  if (tokens.length < 2)
+    return false;
+
+  const executable = commandBasename(tokens[0]).toLowerCase();
+  const currentExecutable = commandBasename(process.execPath).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe' && executable !== currentExecutable)
+    return false;
+
+  const entryPoint = commandBasename(tokens[1]);
+  if (entryPoint === 'cliDaemon.js' || entryPoint === 'dashboardApp.js')
+    return true;
+  return tokens[2] === 'run-cli-server' || tokens[2] === 'cli-daemon';
+}
+
+function tokenizeCommandLine(commandLine: string): string[] {
+  const matches = commandLine.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  return matches.map(token => {
+    const quoted = token.length >= 2 && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith('\'') && token.endsWith('\'')));
+    return quoted ? token.slice(1, -1) : token;
+  });
+}
+
+function commandBasename(file: string): string {
+  return file.includes('\\') ? path.win32.basename(file) : path.basename(file);
 }

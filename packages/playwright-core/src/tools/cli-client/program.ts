@@ -16,14 +16,14 @@
 
 /* eslint-disable no-restricted-properties */
 
-import { execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 
 import crypto from 'crypto';
-import os from 'os';
 import path from 'path';
 
 import { isKnownChannel, listChannelSessions } from './channelSessions';
 import { JsonOutput, TextOutput } from './output';
+import { isPlaywrightDaemonCommand } from './processUtils';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
 import { withSessionLock } from './sessionLock';
@@ -349,57 +349,53 @@ async function installBrowser() {
   program.parse(argv);
 }
 
-const daemonProcessPatterns = ['run-mcp-server', 'run-cli-server', 'cli-daemon', 'cliDaemon.js', 'dashboardApp.js'];
-
 async function killAllDaemons(): Promise<number[]> {
-  const platform = os.platform();
   const pidFilterEnv = process.env.PWTEST_KILL_ALL_PID_FILTER_FOR_TEST;
   const pidFilter = pidFilterEnv ? new Set(pidFilterEnv.split(',').map(p => parseInt(p, 10)).filter(n => !isNaN(n))) : undefined;
   const killed: number[] = [];
 
   try {
-    if (platform === 'win32') {
-      const clauses = [`(${daemonProcessPatterns.map(p => `$_.CommandLine -like '*${p}*'`).join(' -or ')})`];
-      if (pidFilter)
-        clauses.push(`(${[...pidFilter].map(p => `$_.ProcessId -eq ${p}`).join(' -or ')})`);
-      const whereClause = clauses.join(' -and ');
-      const result = execSync(
-          `powershell -NoProfile -NonInteractive -Command `
-          + `"Get-CimInstance Win32_Process `
-          + `| Where-Object { ${whereClause} } `
-          + `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"`,
-          { encoding: 'utf-8' }
-      );
-      const pids = result.split('\n')
-          .map(line => line.trim())
-          .filter(line => /^\d+$/.test(line));
-      for (const pid of pids)
-        killed.push(parseInt(pid, 10));
+    if (process.platform === 'win32') {
+      const result = execFileSync('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress',
+      ], { encoding: 'utf-8' });
+      const parsed: unknown = JSON.parse(result || '[]');
+      const processes = Array.isArray(parsed) ? parsed : [parsed];
+      for (const processInfo of processes) {
+        if (!processInfo || typeof processInfo !== 'object')
+          continue;
+        const record = processInfo as Record<string, unknown>;
+        if (typeof record.ProcessId !== 'number' || typeof record.CommandLine !== 'string')
+          continue;
+        killDaemonProcess(record.ProcessId, record.CommandLine, pidFilter, killed);
+      }
     } else {
-      const result = execSync('ps auxww', { encoding: 'utf-8' });
+      const result = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf-8' });
       const lines = result.split('\n');
       for (const line of lines) {
-        if (daemonProcessPatterns.some(p => line.includes(p))) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[1];
-          if (pid && /^\d+$/.test(pid)) {
-            const numericPid = parseInt(pid, 10);
-            if (pidFilter && !pidFilter.has(numericPid))
-              continue;
-            try {
-              process.kill(numericPid, 'SIGKILL');
-              killed.push(numericPid);
-            } catch {
-              // Process may have already exited
-            }
-          }
-        }
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        if (match)
+          killDaemonProcess(Number(match[1]), match[2], pidFilter, killed);
       }
     }
   } catch (e) {
     // Silently handle errors - no processes to kill is fine
   }
   return killed;
+}
+
+function killDaemonProcess(pid: number, commandLine: string, pidFilter: Set<number> | undefined, killed: number[]): void {
+  if (!isPlaywrightDaemonCommand(commandLine) || (pidFilter && !pidFilter.has(pid)))
+    return;
+  try {
+    process.kill(pid, 'SIGKILL');
+    killed.push(pid);
+  } catch {
+    // Process may have already exited.
+  }
 }
 
 async function collectList(registry: Registry, clientInfo: ClientInfo, all: boolean): Promise<ListData> {
