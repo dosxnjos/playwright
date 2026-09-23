@@ -176,10 +176,11 @@ export async function program(options?: { embedderVersion?: string}) {
       const targetCount = (attachTarget ? 1 : 0) + (args.cdp ? 1 : 0) + (args.endpoint ? 1 : 0) + (args.extension ? 1 : 0);
       if (targetCount > 1)
         output.errorAttachConflict();
-      if (attachTarget) {
-        assertAttachTargetOwnership(registry, clientInfo.owner, attachTarget);
+      const endpointTarget = attachTarget ?? (typeof args.endpoint === 'string' ? args.endpoint : undefined);
+      if (endpointTarget)
+        assertAttachTargetOwnership(registry, clientInfo.owner, endpointTarget);
+      if (attachTarget)
         args.endpoint = attachTarget;
-      }
       const extensionChannel = typeof args.extension === 'string' ? args.extension : undefined;
       if (extensionChannel) {
         args.browser = extensionChannel;

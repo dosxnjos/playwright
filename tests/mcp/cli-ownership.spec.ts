@@ -150,6 +150,7 @@ test('another owner cannot replace, close, drive, delete, or attach through a se
     await cli('-s', 'protected', 'delete-data', { env: ownerB }),
     await cli('-s', 'protected', 'detach', { env: ownerB }),
     await cli('attach', 'protected', { env: ownerB }),
+    await cli('attach', '--endpoint=protected', { env: ownerB }),
   ];
   for (const attempt of attempts)
     expectOwnershipFailure(attempt);
