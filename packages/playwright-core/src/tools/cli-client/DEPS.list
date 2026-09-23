@@ -6,7 +6,9 @@
 ./minimist.ts
 ./output.ts
 ./session.ts
+./sessionLock.ts
 ./registry.ts
+./processUtils.ts
 
 [output.ts]
 "strict"
@@ -22,6 +24,14 @@
 ../../package.ts
 ../utils/socketConnection.ts
 ./registry.ts
+
+[sessionLock.ts]
+"strict"
+./processUtils.ts
+./registry.ts
+
+[processUtils.ts]
+"strict"
 
 [socketConnection.ts]
 "strict"

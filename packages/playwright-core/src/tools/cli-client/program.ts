@@ -26,6 +26,7 @@ import { isKnownChannel, listChannelSessions } from './channelSessions';
 import { JsonOutput, TextOutput } from './output';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
+import { withSessionLock } from './sessionLock';
 import { libPath } from '../../package';
 import { serverRegistry } from '../../serverRegistry';
 import { minimist } from './minimist';
@@ -127,19 +128,24 @@ export async function program(options?: { embedderVersion?: string}) {
       const entries = registry.entries(clientInfo);
       const closed: string[] = [];
       for (const entry of entries) {
-        await new Session(entry).stop();
-        closed.push(entry.config.name);
+        await withSessionLock(clientInfo, entry.config.name, async () => {
+          const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
+          if (!currentEntry)
+            return;
+          await new Session(currentEntry).stop();
+          closed.push(entry.config.name);
+        });
       }
       output.closeAll(closed);
       return;
     }
     case 'delete-data': {
-      const entry = registry.entry(clientInfo, sessionName);
-      if (!entry) {
-        output.deleteData(sessionName, { existed: false, deletedUserDataDir: false });
-        return;
-      }
-      const result = await new Session(entry).deleteData();
+      const result = await withSessionLock(clientInfo, sessionName, async () => {
+        const entry = await Registry.readEntry(clientInfo, sessionName);
+        if (!entry)
+          return { existed: false, deletedUserDataDir: false };
+        return await new Session(entry).deleteData();
+      });
       output.deleteData(sessionName, result);
       return;
     }
@@ -149,7 +155,7 @@ export async function program(options?: { embedderVersion?: string}) {
       return;
     }
     case 'open': {
-      const { pid } = await startSession(sessionName, registry, clientInfo, args, 'open');
+      const { pid } = await startSession(sessionName, clientInfo, args, 'open');
       const newEntry = await registry.loadEntry(clientInfo, sessionName);
       const params = args._.slice(1);
       const toolText = await runInSessionOrStop(newEntry, clientInfo, { _: ['goto', ...(params.length ? params : ['about:blank'])] }, output);
@@ -175,23 +181,27 @@ export async function program(options?: { embedderVersion?: string}) {
         output.errorAttachNoTarget();
       const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? cdpChannel ?? extensionChannel ?? sessionName;
       args.session = attachSessionName;
-      const { pid } = await startSession(attachSessionName, registry, clientInfo, args, 'attach');
+      const { pid } = await startSession(attachSessionName, clientInfo, args, 'attach');
       const newEntry = await registry.loadEntry(clientInfo, attachSessionName);
       const toolText = await runInSessionOrStop(newEntry, clientInfo, { _: ['snapshot'], filename: '<auto>' }, output);
       output.attach(attachSessionName, pid, targetName, toolText);
       return;
     }
     case 'close': {
-      const closeEntry = registry.entry(clientInfo, sessionName);
-      const { wasOpen } = closeEntry ? await new Session(closeEntry).stop() : { wasOpen: false };
+      const { wasOpen } = await withSessionLock(clientInfo, sessionName, async () => {
+        const closeEntry = await Registry.readEntry(clientInfo, sessionName);
+        return closeEntry ? await new Session(closeEntry).stop() : { wasOpen: false };
+      });
       output.close(sessionName, wasOpen);
       return;
     }
     case 'detach': {
-      const detachEntry = registry.entry(clientInfo, sessionName);
-      if (detachEntry && !detachEntry.config.attached)
-        output.errorDetachNotAttached(sessionName);
-      const { wasOpen } = detachEntry ? await new Session(detachEntry).stop() : { wasOpen: false };
+      const { wasOpen } = await withSessionLock(clientInfo, sessionName, async () => {
+        const detachEntry = await Registry.readEntry(clientInfo, sessionName);
+        if (detachEntry && !detachEntry.config.attached)
+          output.errorDetachNotAttached(sessionName);
+        return detachEntry ? await new Session(detachEntry).stop() : { wasOpen: false };
+      });
       output.detach(sessionName, wasOpen);
       return;
     }
@@ -282,11 +292,13 @@ export async function program(options?: { embedderVersion?: string}) {
   }
 }
 
-async function startSession(sessionName: string, registry: Registry, clientInfo: ClientInfo, args: MinimistArgs, mode: 'open' | 'attach') {
-  const entry = registry.entry(clientInfo, sessionName);
-  if (entry)
-    await new Session(entry).stop();
-  return await Session.startDaemon(clientInfo, args, mode);
+async function startSession(sessionName: string, clientInfo: ClientInfo, args: MinimistArgs, mode: 'open' | 'attach') {
+  return await withSessionLock(clientInfo, sessionName, async () => {
+    const entry = await Registry.readEntry(clientInfo, sessionName);
+    if (entry)
+      await new Session(entry).stop();
+    return await Session.startDaemon(clientInfo, args, mode);
+  });
 }
 
 async function runInSession(entry: SessionFile, clientInfo: ClientInfo, args: MinimistArgs, output: Output): Promise<string> {

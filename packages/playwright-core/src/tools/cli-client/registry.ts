@@ -80,7 +80,7 @@ export class Registry {
   }
 
   async loadEntry(clientInfo: ClientInfo, sessionName: string): Promise<SessionFile> {
-    const entry = await Registry._loadSessionEntry(clientInfo.daemonProfilesDir, sessionName + '.session');
+    const entry = await Registry.readEntry(clientInfo, sessionName);
     if (!entry)
       throw new Error(`Could not start the session "${sessionName}"`);
 
@@ -95,6 +95,10 @@ export class Registry {
       list.splice(oldIndex, 1);
     list.push(entry);
     return entry;
+  }
+
+  static async readEntry(clientInfo: ClientInfo, sessionName: string): Promise<SessionFile | undefined> {
+    return await Registry._loadSessionEntry(clientInfo.daemonProfilesDir, sessionName + '.session');
   }
 
   private static async _loadSessionEntry(daemonDir: string, file: string): Promise<SessionFile | undefined> {
