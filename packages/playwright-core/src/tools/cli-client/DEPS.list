@@ -23,6 +23,7 @@
 "strict"
 ../../package.ts
 ../utils/socketConnection.ts
+./processUtils.ts
 ./registry.ts
 
 [sessionLock.ts]

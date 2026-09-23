@@ -414,8 +414,8 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
       continue;
     for (const entry of list) {
       const session = new Session(entry);
-      const canConnect = await session.canConnect();
-      if (!canConnect) {
+      const status = await session.status();
+      if (status === 'stale') {
         await session.deleteSessionConfig();
         continue;
       }
@@ -424,7 +424,7 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
       browsers.push({
         name: session.name,
         workspace: workspaceKey,
-        status: canConnect ? 'open' : 'closed',
+        status,
         browserType: channel,
         userDataDir: config.browser?.userDataDir ?? null,
         headed: config.browser ? !config.browser.launchOptions.headless : undefined,

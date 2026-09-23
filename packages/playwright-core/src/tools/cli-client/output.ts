@@ -27,7 +27,7 @@ import type { BrowserDescriptor } from '../../serverRegistry';
 export type ListedBrowser = {
   name: string;
   workspace: string;
-  status: 'open' | 'closed';
+  status: 'open' | 'unresponsive' | 'stale';
   browserType: string | undefined;
   userDataDir: string | null;
   headed: boolean | undefined;

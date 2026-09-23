@@ -18,14 +18,16 @@ import { spawn } from 'child_process';
 
 import fs from 'fs';
 import net from 'net';
-import os from 'os';
 import path from 'path';
 import { libPath } from '../../package';
 import { compareSemver, SocketConnection } from '../utils/socketConnection';
+import { isProcessAlive } from './processUtils';
 import { resolveSessionName } from './registry';
 
 import type { SessionConfig, ClientInfo, SessionFile } from './registry';
 import type { MinimistArgs } from './minimist';
+
+export type SessionStatus = 'open' | 'unresponsive' | 'stale';
 
 export class Session {
   readonly name: string;
@@ -94,10 +96,7 @@ export class Session {
         resolve({ socket });
       });
       socket.on('error', error => {
-        if (os.platform() !== 'win32')
-          void fs.promises.unlink(this.config.socketPath).catch(() => {}).then(() => resolve({ error }));
-        else
-          resolve({ error });
+        resolve({ error });
       });
     });
   }
@@ -109,6 +108,14 @@ export class Session {
       return true;
     }
     return false;
+  }
+
+  async status(): Promise<SessionStatus> {
+    if (await this.canConnect())
+      return 'open';
+    if (this.config.pid !== undefined && isProcessAlive(this.config.pid))
+      return 'unresponsive';
+    return 'stale';
   }
 
   static async startDaemon(clientInfo: ClientInfo, cliArgs: MinimistArgs, mode: 'open' | 'attach'): Promise<{ pid: number | undefined, sessionName: string, endpoint: string | undefined }> {
