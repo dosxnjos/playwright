@@ -4,9 +4,15 @@
 ../../serverRegistry.ts
 ./channelSessions.ts
 ./minimist.ts
+./ownership.ts
 ./output.ts
 ./session.ts
+./sessionLock.ts
 ./registry.ts
+./processUtils.ts
+
+[ownership.ts]
+"strict"
 
 [output.ts]
 "strict"
@@ -21,7 +27,16 @@
 "strict"
 ../../package.ts
 ../utils/socketConnection.ts
+./processUtils.ts
 ./registry.ts
+
+[sessionLock.ts]
+"strict"
+./processUtils.ts
+./registry.ts
+
+[processUtils.ts]
+"strict"
 
 [socketConnection.ts]
 "strict"

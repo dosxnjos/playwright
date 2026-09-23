@@ -18,14 +18,16 @@ import { spawn } from 'child_process';
 
 import fs from 'fs';
 import net from 'net';
-import os from 'os';
 import path from 'path';
 import { libPath } from '../../package';
 import { compareSemver, SocketConnection } from '../utils/socketConnection';
+import { isProcessAlive } from './processUtils';
 import { resolveSessionName } from './registry';
 
 import type { SessionConfig, ClientInfo, SessionFile } from './registry';
 import type { MinimistArgs } from './minimist';
+
+export type SessionStatus = 'open' | 'unresponsive' | 'stale';
 
 export class Session {
   readonly name: string;
@@ -63,7 +65,10 @@ export class Session {
     await this.stop();
 
     const dataDirs = await fs.promises.readdir(this._sessionFile.daemonDir).catch(() => []);
-    const matchingEntries = dataDirs.filter(file => file === `${this.name}.session` || file.startsWith(`ud-${this.name}-`));
+    const browserToken = this.config.browser.launchOptions.channel ?? this.config.browser.browserName;
+    const sessionFileName = `${this.name}.session`;
+    const userDataDirName = `ud-${this.name}-${browserToken}`;
+    const matchingEntries = dataDirs.filter(file => file === sessionFileName || file === userDataDirName);
     if (matchingEntries.length === 0)
       return { existed: false, deletedUserDataDir: false };
 
@@ -94,10 +99,7 @@ export class Session {
         resolve({ socket });
       });
       socket.on('error', error => {
-        if (os.platform() !== 'win32')
-          void fs.promises.unlink(this.config.socketPath).catch(() => {}).then(() => resolve({ error }));
-        else
-          resolve({ error });
+        resolve({ error });
       });
     });
   }
@@ -109,6 +111,14 @@ export class Session {
       return true;
     }
     return false;
+  }
+
+  async status(): Promise<SessionStatus> {
+    if (await this.canConnect())
+      return 'open';
+    if (this.config.pid !== undefined && isProcessAlive(this.config.pid))
+      return 'unresponsive';
+    return 'stale';
   }
 
   static async startDaemon(clientInfo: ClientInfo, cliArgs: MinimistArgs, mode: 'open' | 'attach'): Promise<{ pid: number | undefined, sessionName: string, endpoint: string | undefined }> {
@@ -148,6 +158,7 @@ export class Session {
       detached: true,
       stdio: ['ignore', 'pipe', err],
       cwd: process.cwd(), // Will be used as root.
+      env: daemonEnvironment(clientInfo.owner),
     });
 
     let signalled = false;
@@ -201,6 +212,15 @@ export class Session {
   async deleteSessionConfig() {
     await fs.promises.rm(this._sessionFile.file).catch(() => {});
   }
+}
+
+function daemonEnvironment(owner: string | undefined): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (owner === undefined)
+    delete env.PLAYWRIGHT_CLI_OWNER;
+  else
+    env.PLAYWRIGHT_CLI_OWNER = owner;
+  return env;
 }
 
 class SocketConnectionClient {

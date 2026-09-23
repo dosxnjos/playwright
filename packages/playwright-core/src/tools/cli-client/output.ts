@@ -27,7 +27,11 @@ import type { BrowserDescriptor } from '../../serverRegistry';
 export type ListedBrowser = {
   name: string;
   workspace: string;
-  status: 'open' | 'closed';
+  status: 'open' | 'unresponsive' | 'stale';
+  owner?: string | null;
+  pid?: number | null;
+  startedAt?: number | null;
+  ownedByCaller?: boolean;
   browserType: string | undefined;
   userDataDir: string | null;
   headed: boolean | undefined;
@@ -40,6 +44,7 @@ export type ListedBrowser = {
 export type ListData = {
   all: boolean;
   browsers: ListedBrowser[];
+  ownershipDetails: boolean;
   servers?: BrowserDescriptor[];
   channelSessions?: ChannelSession[];
 };
@@ -59,7 +64,7 @@ export interface Output {
   errorAttachNoTarget(): never;
 
   list(data: ListData): void;
-  closeAll(sessions: string[]): void;
+  closeAll(sessions: string[], skipped?: number, lockContended?: string[]): void;
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void;
   killAll(pids: number[]): void;
   open(session: string, pid: number | undefined, toolResult: string): void;
@@ -126,7 +131,7 @@ export class TextOutput implements Output {
     return process.exit(1);
   }
 
-  list({ all, browsers, servers, channelSessions }: ListData): void {
+  list({ all, browsers, ownershipDetails, servers, channelSessions }: ListData): void {
     const byWorkspace = new Map<string, ListedBrowser[]>();
     for (const browser of browsers) {
       let list = byWorkspace.get(browser.workspace);
@@ -144,7 +149,7 @@ export class TextOutput implements Output {
       if (all)
         console.log(`${path.relative(process.cwd(), workspaceKey) || '/'}:`);
       for (const browser of list)
-        console.log(renderBrowser(browser));
+        console.log(renderBrowser(browser, ownershipDetails));
       count += list.length;
     }
 
@@ -187,8 +192,11 @@ export class TextOutput implements Output {
     }
   }
 
-  closeAll(_sessions: string[]): void {
-    // Text mode is intentionally silent, matching historical behavior.
+  closeAll(_sessions: string[], skipped?: number, lockContended?: string[]): void {
+    if (skipped !== undefined)
+      console.log(`Skipped ${skipped} session${skipped === 1 ? '' : 's'} owned by another owner.`);
+    if (lockContended?.length)
+      console.log(`Skipped locked session${lockContended.length === 1 ? '' : 's'}: ${lockContended.map(name => `'${name}'`).join(', ')}.`);
   }
 
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void {
@@ -316,8 +324,12 @@ export class JsonOutput implements Output {
     this._emit(payload);
   }
 
-  closeAll(sessions: string[]): void {
-    this._emit({ closed: sessions });
+  closeAll(sessions: string[], skipped?: number, lockContended?: string[]): void {
+    this._emit({
+      closed: sessions,
+      ...(skipped !== undefined ? { skipped } : {}),
+      ...(lockContended?.length ? { lockContended } : {}),
+    });
   }
 
   deleteData(session: string, result: { existed: boolean, deletedUserDataDir: boolean }): void {
@@ -379,9 +391,17 @@ function parseJsonText(text: string): unknown {
   }
 }
 
-function renderBrowser(browser: ListedBrowser): string {
+function renderBrowser(browser: ListedBrowser, ownershipDetails: boolean): string {
   const lines = [`- ${browser.name}:`];
   lines.push(`  - status: ${browser.status}`);
+  if (ownershipDetails) {
+    lines.push(`  - owner: ${browser.owner ?? '<unowned>'}`);
+    if (browser.pid !== null)
+      lines.push(`  - pid: ${browser.pid}`);
+    if (browser.startedAt !== null)
+      lines.push(`  - started-at: ${browser.startedAt}`);
+    lines.push(`  - owned-by-caller: ${browser.ownedByCaller}`);
+  }
   if (browser.status === 'open' && !browser.compatible)
     lines.push(`  - version: v${browser.version} [incompatible please re-open]`);
   if (browser.browserType)

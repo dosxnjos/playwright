@@ -38,10 +38,10 @@ playwright-cli list
 playwright-cli close                # stop the default browser
 playwright-cli -s=mysession close   # stop a named browser
 
-# Stop all browser sessions
+# Stop all browser sessions owned by this caller
 playwright-cli close-all
 
-# Forcefully kill all daemon processes (for stale/zombie processes)
+# Last resort for stale daemon processes on an unscoped, single-user machine
 playwright-cli kill-all
 
 # Delete browser session user data (profile directory)
@@ -57,6 +57,14 @@ Set a default browser session name via environment variable:
 export PLAYWRIGHT_CLI_SESSION="mysession"
 playwright-cli open example.com  # Uses "mysession" automatically
 ```
+
+## Owner-scoped sessions (multi-agent)
+
+Set `PLAYWRIGHT_CLI_OWNER` to an opaque caller label to isolate lifecycle operations. A caller cannot open over, close, drive, delete, attach through, or kill a session owned by another label. `close-all` closes only sessions with the caller's owner and reports sessions it skipped. `kill-all` is disabled while an owner is set.
+
+If `PLAYWRIGHT_CLI_SESSION` is provided, use that session name for every command. Do not invent a different name or pass `-s`.
+
+Use `playwright-cli list --all --json` to inspect each session's owner, PID, start time, liveness status, and whether it is owned by the caller. The owner label is not a secret or authentication: it protects cooperating local agents from accidental interference, but another process with the same OS privileges can set the same label or modify the local registry.
 
 ## Common Patterns
 
@@ -210,12 +218,11 @@ playwright-cli -s=s1 open https://github.com
 playwright-cli -s=auth close
 playwright-cli -s=scrape close
 
-# Or stop all at once
+# Or stop all sessions owned by the caller
 playwright-cli close-all
-
-# If browsers become unresponsive or zombie processes remain
-playwright-cli kill-all
 ```
+
+On an unscoped, single-user machine only, `kill-all` remains a last resort for stale daemon processes. Do not use it for routine cleanup.
 
 ### 3. Delete Stale Browser Data
 

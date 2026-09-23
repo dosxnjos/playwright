@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
@@ -35,14 +36,58 @@ import type { ContextConfig } from '../backend/context';
 import type { BrowserInfo } from '../../serverRegistry';
 import type { ClientInfo as McpClientInfo } from '../utils/mcp/server';
 
-async function socketExists(socketPath: string): Promise<boolean> {
+type FileIdentity = {
+  dev: number;
+  ino: number;
+};
+
+async function socketPathExists(socketPath: string): Promise<boolean> {
   try {
-    const stat = await fs.promises.stat(socketPath);
-    if (stat?.isSocket())
-      return true;
-  } catch (e) {
+    await fs.promises.stat(socketPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error;
   }
   return false;
+}
+
+async function prepareSocketPath(socketPath: string): Promise<void> {
+  if (process.platform === 'win32' || !await socketPathExists(socketPath))
+    return;
+
+  const stale = await new Promise<boolean>((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('error', error => {
+      socket.destroy();
+      if ((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' || (error as NodeJS.ErrnoException).code === 'ENOENT')
+        resolve(true);
+      else
+        reject(error);
+    });
+  });
+  if (!stale)
+    throw new Error(`Another daemon is already listening on ${socketPath}`);
+
+  await fs.promises.unlink(socketPath).catch(error => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error;
+  });
+}
+
+async function fileIdentity(file: string): Promise<FileIdentity | undefined> {
+  try {
+    const stat = await fs.promises.stat(file);
+    return { dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return undefined;
+    throw error;
+  }
 }
 
 export async function startCliDaemonServer(
@@ -61,20 +106,13 @@ export async function startCliDaemonServer(
   const sessionConfig = createSessionConfig(clientInfo, sessionName, browserInfo, options);
   const { socketPath } = sessionConfig;
 
-  // Clean up existing socket file on Unix
-  if (process.platform !== 'win32' && await socketExists(socketPath)) {
-    try {
-      await fs.promises.unlink(socketPath);
-    } catch (error) {
-      throw error;
-    }
-  }
-
   const backend = new BrowserBackend(contextConfig, browserContext, browserTools);
   await backend.initialize(mcpClientInfo);
 
   if (browserContext.isClosed())
     throw new Error('Browser context was closed before the daemon could start');
+
+  await prepareSocketPath(socketPath);
 
   const server = net.createServer(socket => {
     const connection = new SocketConnection(socket);
@@ -84,7 +122,7 @@ export async function startCliDaemonServer(
       const { id, method, params } = message;
       try {
         if (method === 'stop') {
-          await deleteSessionFile(clientInfo, sessionConfig);
+          await deleteSessionFile(clientInfo, sessionConfig, socketIdentity);
           const sendAck = async () => connection.send({ id, result: 'ok' }).catch(() => {});
           if (options?.exitOnClose)
             gracefullyProcessExitDoNotHang(0, () => sendAck());
@@ -106,8 +144,9 @@ export async function startCliDaemonServer(
   });
 
   decorateServer(server);
+  let socketIdentity: FileIdentity | undefined;
   browserContext.on('close', () => Promise.resolve().then(async () => {
-    await deleteSessionFile(clientInfo, sessionConfig);
+    await deleteSessionFile(clientInfo, sessionConfig, socketIdentity);
     if (options?.exitOnClose)
       gracefullyProcessExitDoNotHang(0);
   }));
@@ -117,6 +156,11 @@ export async function startCliDaemonServer(
     server.listen(socketPath, () => resolve());
   });
 
+  if (process.platform !== 'win32') {
+    socketIdentity = await fileIdentity(socketPath);
+    if (!socketIdentity)
+      throw new Error(`Daemon socket disappeared before registration: ${socketPath}`);
+  }
   await saveSessionFile(clientInfo, sessionConfig);
   return socketPath;
 }
@@ -127,12 +171,23 @@ async function saveSessionFile(clientInfo: ClientInfo, sessionConfig: SessionCon
   await fs.promises.writeFile(sessionFile, JSON.stringify(sessionConfig, null, 2));
 }
 
-async function deleteSessionFile(clientInfo: ClientInfo, sessionConfig: SessionConfig) {
-  await fs.promises.unlink(sessionConfig.socketPath).catch(() => {});
-  if (!sessionConfig.cli.persistent) {
-    const sessionFile = path.join(clientInfo.daemonProfilesDir, `${sessionConfig.name}.session`);
-    await fs.promises.rm(sessionFile).catch(() => {});
+async function deleteSessionFile(clientInfo: ClientInfo, sessionConfig: SessionConfig, socketIdentity: FileIdentity | undefined) {
+  if (socketIdentity) {
+    const currentSocketIdentity = await fileIdentity(sessionConfig.socketPath);
+    if (currentSocketIdentity?.dev === socketIdentity.dev && currentSocketIdentity.ino === socketIdentity.ino)
+      await fs.promises.unlink(sessionConfig.socketPath).catch(() => {});
   }
+
+  const sessionFile = path.join(clientInfo.daemonProfilesDir, `${sessionConfig.name}.session`);
+  let registeredInstanceId: string | undefined;
+  try {
+    const value: unknown = JSON.parse(await fs.promises.readFile(sessionFile, 'utf-8'));
+    if (value && typeof value === 'object' && typeof (value as Record<string, unknown>).instanceId === 'string')
+      registeredInstanceId = (value as Record<string, unknown>).instanceId as string;
+  } catch {
+  }
+  if (registeredInstanceId === sessionConfig.instanceId && !sessionConfig.cli.persistent)
+    await fs.promises.rm(sessionFile).catch(() => {});
 }
 
 function formatResult(result: CallToolResult) {
@@ -162,6 +217,10 @@ function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browse
     version: clientInfo.version,
     timestamp: Date.now(),
     socketPath: daemonSocketPath(clientInfo, sessionName),
+    instanceId: crypto.randomUUID(),
+    pid: process.pid,
+    startedAt: Date.now(),
+    owner: clientInfo.owner,
     workspaceDir: clientInfo.workspaceDir,
     attached: options.ownership === 'attached' ? true : undefined,
     cli: { persistent: options.persistent },

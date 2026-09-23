@@ -16,16 +16,18 @@
 
 /* eslint-disable no-restricted-properties */
 
-import { execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 
 import crypto from 'crypto';
-import os from 'os';
 import path from 'path';
 
 import { isKnownChannel, listChannelSessions } from './channelSessions';
+import { sessionOwnershipPolicy } from './ownership';
 import { JsonOutput, TextOutput } from './output';
+import { isPlaywrightDaemonCommand } from './processUtils';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
+import { SessionLockTimeoutError, withSessionLock, withSessionLockIfAvailable } from './sessionLock';
 import { libPath } from '../../package';
 import { serverRegistry } from '../../serverRegistry';
 import { minimist } from './minimist';
@@ -33,6 +35,7 @@ import { minimist } from './minimist';
 import type { ListData, ListedBrowser, Output } from './output';
 import type { ClientInfo, SessionFile } from './registry';
 import type { MinimistArgs } from './minimist';
+import type { SessionPolicyAction } from './ownership';
 
 type GlobalOptions = {
   help?: boolean;
@@ -119,40 +122,59 @@ export async function program(options?: { embedderVersion?: string}) {
 
   switch (commandName) {
     case 'list': {
-      const data = await collectList(registry, clientInfo, !!args.all);
+      const all = !!args.all;
+      const data = await collectList(registry, clientInfo, all, clientInfo.owner !== undefined || (all && output.json));
       output.list(data);
       return;
     }
     case 'close-all': {
       const entries = registry.entries(clientInfo);
       const closed: string[] = [];
+      const lockContended: string[] = [];
+      let skipped = 0;
       for (const entry of entries) {
-        await new Session(entry).stop();
-        closed.push(entry.config.name);
+        try {
+          await withSessionLock(clientInfo, entry.config.name, async () => {
+            const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
+            if (!currentEntry)
+              return;
+            const action = sessionOwnershipPolicy(clientInfo.owner, currentEntry.config.owner, 'open', 'close-all');
+            if (action === 'skip') {
+              skipped++;
+              return;
+            }
+            await new Session(currentEntry).stop();
+            closed.push(currentEntry.config.name);
+          });
+        } catch (error) {
+          if (!(error instanceof SessionLockTimeoutError))
+            throw error;
+          lockContended.push(entry.config.name);
+        }
       }
-      output.closeAll(closed);
+      output.closeAll(closed, clientInfo.owner !== undefined || skipped > 0 ? skipped : undefined, lockContended);
       return;
     }
     case 'delete-data': {
-      const entry = registry.entry(clientInfo, sessionName);
-      if (!entry) {
-        output.deleteData(sessionName, { existed: false, deletedUserDataDir: false });
-        return;
-      }
-      const result = await new Session(entry).deleteData();
+      const result = await withSessionLock(clientInfo, sessionName, async () => {
+        const entry = await Registry.readEntry(clientInfo, sessionName);
+        if (!entry)
+          return { existed: false, deletedUserDataDir: false };
+        assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, entry.config.owner, 'open', 'use'), sessionName, 'delete its data');
+        return await new Session(entry).deleteData();
+      });
       output.deleteData(sessionName, result);
       return;
     }
     case 'kill-all': {
-      const pids = await killAllDaemons();
+      assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, undefined, 'none', 'kill-all'), sessionName, 'kill all daemons');
+      const pids = await killAllDaemons(await ownedLiveDaemonPids());
       output.killAll(pids);
       return;
     }
     case 'open': {
-      const { pid } = await startSession(sessionName, registry, clientInfo, args, 'open');
-      const newEntry = await registry.loadEntry(clientInfo, sessionName);
       const params = args._.slice(1);
-      const toolText = await runInSessionOrStop(newEntry, clientInfo, { _: ['goto', ...(params.length ? params : ['about:blank'])] }, output);
+      const { pid, toolText } = await startSession(sessionName, clientInfo, args, 'open', { _: ['goto', ...(params.length ? params : ['about:blank'])] }, output);
       output.open(sessionName, pid, toolText);
       return;
     }
@@ -161,6 +183,9 @@ export async function program(options?: { embedderVersion?: string}) {
       const targetCount = (attachTarget ? 1 : 0) + (args.cdp ? 1 : 0) + (args.endpoint ? 1 : 0) + (args.extension ? 1 : 0);
       if (targetCount > 1)
         output.errorAttachConflict();
+      const endpointTarget = attachTarget ?? (typeof args.endpoint === 'string' ? args.endpoint : undefined);
+      if (endpointTarget)
+        assertAttachTargetOwnership(registry, clientInfo.owner, endpointTarget);
       if (attachTarget)
         args.endpoint = attachTarget;
       const extensionChannel = typeof args.extension === 'string' ? args.extension : undefined;
@@ -175,23 +200,31 @@ export async function program(options?: { embedderVersion?: string}) {
         output.errorAttachNoTarget();
       const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? cdpChannel ?? extensionChannel ?? sessionName;
       args.session = attachSessionName;
-      const { pid } = await startSession(attachSessionName, registry, clientInfo, args, 'attach');
-      const newEntry = await registry.loadEntry(clientInfo, attachSessionName);
-      const toolText = await runInSessionOrStop(newEntry, clientInfo, { _: ['snapshot'], filename: '<auto>' }, output);
+      const { pid, toolText } = await startSession(attachSessionName, clientInfo, args, 'attach', { _: ['snapshot'], filename: '<auto>' }, output);
       output.attach(attachSessionName, pid, targetName, toolText);
       return;
     }
     case 'close': {
-      const closeEntry = registry.entry(clientInfo, sessionName);
-      const { wasOpen } = closeEntry ? await new Session(closeEntry).stop() : { wasOpen: false };
+      const { wasOpen } = await withSessionLock(clientInfo, sessionName, async () => {
+        const closeEntry = await Registry.readEntry(clientInfo, sessionName);
+        if (!closeEntry)
+          return { wasOpen: false };
+        assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, closeEntry.config.owner, 'open', 'use'), sessionName, 'close it');
+        return await new Session(closeEntry).stop();
+      });
       output.close(sessionName, wasOpen);
       return;
     }
     case 'detach': {
-      const detachEntry = registry.entry(clientInfo, sessionName);
-      if (detachEntry && !detachEntry.config.attached)
-        output.errorDetachNotAttached(sessionName);
-      const { wasOpen } = detachEntry ? await new Session(detachEntry).stop() : { wasOpen: false };
+      const { wasOpen } = await withSessionLock(clientInfo, sessionName, async () => {
+        const detachEntry = await Registry.readEntry(clientInfo, sessionName);
+        if (!detachEntry)
+          return { wasOpen: false };
+        assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, detachEntry.config.owner, 'open', 'use'), sessionName, 'detach it');
+        if (!detachEntry.config.attached)
+          output.errorDetachNotAttached(sessionName);
+        return await new Session(detachEntry).stop();
+      });
       output.detach(sessionName, wasOpen);
       return;
     }
@@ -228,11 +261,8 @@ export async function program(options?: { embedderVersion?: string}) {
         return;
       }
       if (args.annotate) {
-        const entry = registry.entry(clientInfo, sessionName);
-        if (!entry)
-          output.errorBrowserNotOpenForTool(sessionName);
         args.raw = true;
-        const text = await runInSession(entry, clientInfo, args, output);
+        const text = await runOwnedSession(sessionName, clientInfo, args, output);
         output.toolResult(text);
         return;
       }
@@ -271,22 +301,76 @@ export async function program(options?: { embedderVersion?: string}) {
       return;
     }
     default: {
-      const entry = registry.entry(clientInfo, sessionName);
-      if (!entry)
-        output.errorBrowserNotOpenForTool(sessionName);
       if (command.raw)
         args.raw = true;
-      const text = await runInSession(entry, clientInfo, args, output);
+      const text = await runOwnedSession(sessionName, clientInfo, args, output);
       output.toolResult(text);
     }
   }
 }
 
-async function startSession(sessionName: string, registry: Registry, clientInfo: ClientInfo, args: MinimistArgs, mode: 'open' | 'attach') {
-  const entry = registry.entry(clientInfo, sessionName);
-  if (entry)
-    await new Session(entry).stop();
-  return await Session.startDaemon(clientInfo, args, mode);
+async function startSession(sessionName: string, clientInfo: ClientInfo, args: MinimistArgs, mode: 'open' | 'attach', initialCommand: MinimistArgs, output: Output) {
+  const { result, newEntry } = await withSessionLock(clientInfo, sessionName, async () => {
+    const entry = await Registry.readEntry(clientInfo, sessionName);
+    const status = entry ? await new Session(entry).status() : 'none';
+    const action = sessionOwnershipPolicy(clientInfo.owner, entry?.config.owner, status, mode);
+    assertPolicyAllows(action, sessionName, 'replace it');
+    if (entry && action === 'restart')
+      await new Session(entry).stop();
+    if (entry && action === 'clear-and-create')
+      await new Session(entry).deleteSessionConfig();
+
+    const result = await Session.startDaemon(clientInfo, args, mode);
+    const newEntry = await Registry.readEntry(clientInfo, sessionName);
+    if (!newEntry)
+      throw new Error(`Could not start the session "${sessionName}"`);
+    return { result, newEntry };
+  });
+  const toolText = await runInSessionOrStop(newEntry, clientInfo, initialCommand, output);
+  return { ...result, toolText };
+}
+
+async function runOwnedSession(sessionName: string, clientInfo: ClientInfo, args: MinimistArgs, output: Output): Promise<string> {
+  const entry = await withSessionLock(clientInfo, sessionName, async () => {
+    const entry = await Registry.readEntry(clientInfo, sessionName);
+    if (!entry)
+      output.errorBrowserNotOpenForTool(sessionName);
+    assertPolicyAllows(sessionOwnershipPolicy(clientInfo.owner, entry.config.owner, 'open', 'use'), sessionName, 'use it');
+    return entry;
+  });
+  return await runInSession(entry, clientInfo, args, output);
+}
+
+function assertAttachTargetOwnership(registry: Registry, callerOwner: string | undefined, target: string): void {
+  for (const entries of registry.entryMap().values()) {
+    for (const entry of entries) {
+      if (entry.config.name !== target)
+        continue;
+      const action = sessionOwnershipPolicy(callerOwner, entry.config.owner, 'open', 'attach-target');
+      assertPolicyAllows(action, target, 'attach to it');
+    }
+  }
+}
+
+function assertPolicyAllows(action: SessionPolicyAction, sessionName: string, operation: string): void {
+  switch (action) {
+    case 'allow':
+    case 'create':
+    case 'restart':
+    case 'clear-and-create':
+      return;
+    case 'refuse-owner':
+      throw new Error(`Session '${sessionName}' belongs to another owner; refusing to ${operation}`);
+    case 'refuse-unresponsive':
+      throw new Error(`Session '${sessionName}' is unresponsive; refusing to ${operation}`);
+    case 'refuse-kill-all':
+      throw new Error('kill-all is disabled when PLAYWRIGHT_CLI_OWNER is set; use close or close-all instead');
+    case 'not-found':
+    case 'skip':
+    case 'keep':
+    case 'remove':
+      throw new Error(`Session '${sessionName}' ownership policy refused to ${operation}`);
+  }
 }
 
 async function runInSession(entry: SessionFile, clientInfo: ClientInfo, args: MinimistArgs, output: Output): Promise<string> {
@@ -306,7 +390,12 @@ async function runInSessionOrStop(entry: SessionFile, clientInfo: ClientInfo, ar
   try {
     return await runInSession(entry, clientInfo, args, output);
   } catch (e) {
-    await new Session(entry).stop().catch(() => {});
+    await withSessionLock(clientInfo, entry.config.name, async () => {
+      const currentEntry = await Registry.readEntry(clientInfo, entry.config.name);
+      if (!entry.config.instanceId || currentEntry?.config.instanceId !== entry.config.instanceId)
+        return;
+      await new Session(currentEntry).stop();
+    }).catch(() => {});
     throw e;
   }
 }
@@ -337,51 +426,36 @@ async function installBrowser() {
   program.parse(argv);
 }
 
-const daemonProcessPatterns = ['run-mcp-server', 'run-cli-server', 'cli-daemon', 'cliDaemon.js', 'dashboardApp.js'];
-
-async function killAllDaemons(): Promise<number[]> {
-  const platform = os.platform();
+async function killAllDaemons(excludedPids: Set<number>): Promise<number[]> {
   const pidFilterEnv = process.env.PWTEST_KILL_ALL_PID_FILTER_FOR_TEST;
   const pidFilter = pidFilterEnv ? new Set(pidFilterEnv.split(',').map(p => parseInt(p, 10)).filter(n => !isNaN(n))) : undefined;
   const killed: number[] = [];
 
   try {
-    if (platform === 'win32') {
-      const clauses = [`(${daemonProcessPatterns.map(p => `$_.CommandLine -like '*${p}*'`).join(' -or ')})`];
-      if (pidFilter)
-        clauses.push(`(${[...pidFilter].map(p => `$_.ProcessId -eq ${p}`).join(' -or ')})`);
-      const whereClause = clauses.join(' -and ');
-      const result = execSync(
-          `powershell -NoProfile -NonInteractive -Command `
-          + `"Get-CimInstance Win32_Process `
-          + `| Where-Object { ${whereClause} } `
-          + `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"`,
-          { encoding: 'utf-8' }
-      );
-      const pids = result.split('\n')
-          .map(line => line.trim())
-          .filter(line => /^\d+$/.test(line));
-      for (const pid of pids)
-        killed.push(parseInt(pid, 10));
+    if (process.platform === 'win32') {
+      const result = execFileSync('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress',
+      ], { encoding: 'utf-8' });
+      const parsed: unknown = JSON.parse(result || '[]');
+      const processes = Array.isArray(parsed) ? parsed : [parsed];
+      for (const processInfo of processes) {
+        if (!processInfo || typeof processInfo !== 'object')
+          continue;
+        const record = processInfo as Record<string, unknown>;
+        if (typeof record.ProcessId !== 'number' || typeof record.CommandLine !== 'string')
+          continue;
+        killDaemonProcess(record.ProcessId, record.CommandLine, pidFilter, excludedPids, killed);
+      }
     } else {
-      const result = execSync('ps auxww', { encoding: 'utf-8' });
+      const result = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf-8' });
       const lines = result.split('\n');
       for (const line of lines) {
-        if (daemonProcessPatterns.some(p => line.includes(p))) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[1];
-          if (pid && /^\d+$/.test(pid)) {
-            const numericPid = parseInt(pid, 10);
-            if (pidFilter && !pidFilter.has(numericPid))
-              continue;
-            try {
-              process.kill(numericPid, 'SIGKILL');
-              killed.push(numericPid);
-            } catch {
-              // Process may have already exited
-            }
-          }
-        }
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        if (match)
+          killDaemonProcess(Number(match[1]), match[2], pidFilter, excludedPids, killed);
       }
     }
   } catch (e) {
@@ -390,7 +464,33 @@ async function killAllDaemons(): Promise<number[]> {
   return killed;
 }
 
-async function collectList(registry: Registry, clientInfo: ClientInfo, all: boolean): Promise<ListData> {
+function killDaemonProcess(pid: number, commandLine: string, pidFilter: Set<number> | undefined, excludedPids: Set<number>, killed: number[]): void {
+  if (excludedPids.has(pid) || !isPlaywrightDaemonCommand(commandLine) || (pidFilter && !pidFilter.has(pid)))
+    return;
+  try {
+    process.kill(pid, 'SIGKILL');
+    killed.push(pid);
+  } catch {
+    // Process may have already exited.
+  }
+}
+
+async function ownedLiveDaemonPids(): Promise<Set<number>> {
+  const result = new Set<number>();
+  const registry = await Registry.load();
+  for (const entries of registry.entryMap().values()) {
+    for (const entry of entries) {
+      if (entry.config.owner === undefined || entry.config.pid === undefined)
+        continue;
+      const status = await new Session(entry).status();
+      if (status !== 'stale')
+        result.add(entry.config.pid);
+    }
+  }
+  return result;
+}
+
+async function collectList(registry: Registry, clientInfo: ClientInfo, all: boolean, ownershipDetails: boolean): Promise<ListData> {
   const browsers: ListedBrowser[] = [];
   const entries = registry.entryMap();
 
@@ -401,18 +501,45 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
     if (!all && workspaceKey !== key)
       continue;
     for (const entry of list) {
-      const session = new Session(entry);
-      const canConnect = await session.canConnect();
-      if (!canConnect) {
-        await session.deleteSessionConfig();
+      const entryClientInfo = { ...clientInfo, daemonProfilesDir: entry.daemonDir };
+      let currentEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+      if (!currentEntry)
         continue;
+      let session = new Session(currentEntry);
+      let status = await session.status();
+      const gcAction = sessionOwnershipPolicy(clientInfo.owner, session.config.owner, status, 'list-gc');
+      if (gcAction === 'remove') {
+        const attempt = await withSessionLockIfAvailable(entryClientInfo, entry.config.name, async () => {
+          const lockedEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+          if (!lockedEntry)
+            return true;
+          const lockedSession = new Session(lockedEntry);
+          const lockedStatus = await lockedSession.status();
+          if (sessionOwnershipPolicy(clientInfo.owner, lockedSession.config.owner, lockedStatus, 'list-gc') !== 'remove')
+            return false;
+          await lockedSession.deleteSessionConfig();
+          return true;
+        });
+        if (attempt.acquired && attempt.value)
+          continue;
+        currentEntry = await Registry.readEntry(entryClientInfo, entry.config.name);
+        if (!currentEntry)
+          continue;
+        session = new Session(currentEntry);
+        status = await session.status();
       }
       const config = session.config;
       const channel = config.browser?.launchOptions.channel ?? config.browser?.browserName;
       browsers.push({
         name: session.name,
         workspace: workspaceKey,
-        status: canConnect ? 'open' : 'closed',
+        status,
+        ...(ownershipDetails ? {
+          owner: config.owner ?? null,
+          pid: config.pid ?? null,
+          startedAt: config.startedAt ?? null,
+          ownedByCaller: clientInfo.owner === config.owner,
+        } : {}),
         browserType: channel,
         userDataDir: config.browser?.userDataDir ?? null,
         headed: config.browser ? !config.browser.launchOptions.headless : undefined,
@@ -425,10 +552,10 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
   }
 
   if (!all)
-    return { all, browsers };
+    return { all, browsers, ownershipDetails };
 
   const servers = [...serverEntries.values()].flat();
-  return { all, browsers, servers, channelSessions: await listChannelSessions() };
+  return { all, browsers, ownershipDetails, servers, channelSessions: await listChannelSessions() };
 }
 
 function validateFlags(args: MinimistArgs, command: { flags: Record<string, 'boolean' | 'string'>, help: string }, output: Output) {

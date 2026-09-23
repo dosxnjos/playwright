@@ -340,11 +340,17 @@ playwright-cli -s=mysession close  # stop a named browser
 playwright-cli -s=mysession delete-data  # delete user data for persistent session
 
 playwright-cli list
-# Close all browsers
+# Close all browsers owned by this caller
 playwright-cli close-all
-# Forcefully kill all browser processes
-playwright-cli kill-all
 ```
+
+### Owner-scoped sessions (multi-agent)
+
+When `PLAYWRIGHT_CLI_OWNER` is set, sessions owned by other callers cannot be replaced, closed, driven, deleted, or killed. `close-all` closes only sessions with the same owner, and `kill-all` is disabled. If `PLAYWRIGHT_CLI_SESSION` is already set, use that session and do not invent a name or pass `-s`.
+
+The owner is an opaque coordination label, not a secret or an authentication credential. It prevents accidental interference between cooperating local agents; a process running as the same OS user can still set the label or edit registry files.
+
+Use `kill-all` only as a last resort on an unscoped, single-user machine with stale daemon processes. Prefer `close` or `close-all` for routine cleanup.
 
 ## Installation
 

@@ -25,6 +25,7 @@ import type * as playwright from '../../..';
 
 export type ClientInfo = {
   version: string;
+  owner: string | undefined;
   workspaceDirHash: string;
   daemonProfilesDir: string;
   workspaceDir: string | undefined;
@@ -40,6 +41,10 @@ export type SessionConfig = {
   version: string;
   timestamp: number;
   socketPath: string;
+  instanceId?: string;
+  pid?: number;
+  startedAt?: number;
+  owner?: string;
   attached?: boolean;
   cli: {
     persistent?: boolean;
@@ -80,7 +85,7 @@ export class Registry {
   }
 
   async loadEntry(clientInfo: ClientInfo, sessionName: string): Promise<SessionFile> {
-    const entry = await Registry._loadSessionEntry(clientInfo.daemonProfilesDir, sessionName + '.session');
+    const entry = await Registry.readEntry(clientInfo, sessionName);
     if (!entry)
       throw new Error(`Could not start the session "${sessionName}"`);
 
@@ -95,6 +100,10 @@ export class Registry {
       list.splice(oldIndex, 1);
     list.push(entry);
     return entry;
+  }
+
+  static async readEntry(clientInfo: ClientInfo, sessionName: string): Promise<SessionFile | undefined> {
+    return await Registry._loadSessionEntry(clientInfo.daemonProfilesDir, sessionName + '.session');
   }
 
   private static async _loadSessionEntry(daemonDir: string, file: string): Promise<SessionFile | undefined> {
@@ -168,11 +177,21 @@ export function createClientInfo(): ClientInfo {
 
   return {
     version,
+    owner: readOwner(),
     workspaceDir,
     workspaceDirHash,
     daemonProfilesDir: daemonProfilesDir(workspaceDirHash),
     homeDir: os.homedir(),
   };
+}
+
+function readOwner(): string | undefined {
+  const owner = process.env.PLAYWRIGHT_CLI_OWNER;
+  if (!owner)
+    return undefined;
+  if (owner.length > 256 || !/^[\x20-\x7e]+$/.test(owner))
+    throw new Error('PLAYWRIGHT_CLI_OWNER must be at most 256 printable ASCII characters');
+  return owner;
 }
 
 function findWorkspaceDir(startDir: string): string | undefined {
