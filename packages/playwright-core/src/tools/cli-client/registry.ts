@@ -40,6 +40,9 @@ export type SessionConfig = {
   version: string;
   timestamp: number;
   socketPath: string;
+  instanceId?: string;
+  pid?: number;
+  startedAt?: number;
   attached?: boolean;
   cli: {
     persistent?: boolean;
