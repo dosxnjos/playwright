@@ -111,7 +111,7 @@ test('same owner can reopen without leaving the old daemon alive', async ({ cli,
   }));
 });
 
-test('concurrent opens serialize for different owners and unscoped callers', async ({ cli, server }) => {
+test('concurrent opens serialize for different owners', async ({ cli, server }) => {
   const owned = await Promise.all([
     cli('-s', 'owned-race', 'open', server.HELLO_WORLD, { env: ownerA }),
     cli('-s', 'owned-race', 'open', server.EMPTY_PAGE, { env: ownerB }),
@@ -125,7 +125,9 @@ test('concurrent opens serialize for different owners and unscoped callers', asy
   expect(isAlive(winners[0].daemonPid)).toBe(true);
   expect(daemonPids('owned-race')).toEqual([winners[0].daemonPid]);
   expect((await cli('-s', 'owned-race', 'goto', server.HELLO_WORLD, { env: winnerOwner })).exitCode).toBe(0);
+});
 
+test('concurrent unscoped opens leave one reachable daemon', async ({ cli, server }) => {
   const unscoped = await Promise.all([
     cli('-s', 'unscoped-race', 'open', server.HELLO_WORLD),
     cli('-s', 'unscoped-race', 'open', server.EMPTY_PAGE),
