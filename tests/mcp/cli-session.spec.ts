@@ -91,6 +91,23 @@ test('delete-data named session', async ({ cli, server, mcpBrowserNormalized }) 
   expect(fs.existsSync(dataDir)).toBe(false);
 });
 
+test('delete-data does not remove a prefixed session profile', async ({ cli, server, mcpBrowserNormalized }) => {
+  await cli('-s', 'app', 'open', server.HELLO_WORLD, '--persistent');
+  await cli('-s', 'app-admin', 'open', server.HELLO_WORLD, '--persistent');
+
+  const daemonDir = await daemonFolder();
+  const appDataDir = path.resolve(daemonDir, `ud-app-${mcpBrowserNormalized}`);
+  const adminDataDir = path.resolve(daemonDir, `ud-app-admin-${mcpBrowserNormalized}`);
+  expect(fs.existsSync(appDataDir)).toBe(true);
+  expect(fs.existsSync(adminDataDir)).toBe(true);
+
+  const { output } = await cli('-s', 'app', 'delete-data');
+  expect(output).toContain(`Deleted user data for browser 'app'.`);
+  expect(fs.existsSync(appDataDir)).toBe(false);
+  expect(fs.existsSync(adminDataDir)).toBe(true);
+  expect((await cli('-s', 'app-admin', 'goto', server.EMPTY_PAGE)).exitCode).toBe(0);
+});
+
 test('delete-data non-existent session', async ({ cli }) => {
   const { output } = await cli('-s', 'nonexistent', 'delete-data');
   expect(output).toContain(`No user data found for browser 'nonexistent'.`);
