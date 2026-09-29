@@ -114,6 +114,10 @@ class PlaywrightExtension {
       const taken = [...this._connections.values()].map(group => group.groupStyle);
       const group = new ConnectedTabGroup(connection, tab, clientName, uniqueGroupStyle(clientName, taken), tabId => this._pendingConnections.has(tabId));
       group.onclose = () => this._connections.delete(id);
+      group.onlabelrequest = label => {
+        const others = [...this._connections].filter(([otherId]) => otherId !== id).map(([, other]) => other.groupStyle);
+        return group.setTitle(uniqueGroupStyle(label, others).title);
+      };
       this._connections.set(id, group);
 
       await Promise.all([

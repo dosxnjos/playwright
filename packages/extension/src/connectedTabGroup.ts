@@ -71,7 +71,7 @@ export async function cleanupStalePlaywrightGroups(): Promise<void> {
 // in `_onTabUpdated` stay synchronous.
 export class ConnectedTabGroup {
   readonly clientName: string | undefined;
-  readonly groupStyle: GroupStyle;
+  groupStyle: GroupStyle;
   private _connection: RelayConnection;
   private _isTabReserved: (tabId: number) => boolean;
   private _groupId: number | null = null;
@@ -80,6 +80,8 @@ export class ConnectedTabGroup {
   private _onTabRemovedListener: (tabId: number) => void;
 
   onclose?: () => void;
+  // Fork: asks the owner (which sees every connection) for the deduped title of a client-supplied label.
+  onlabelrequest?: (label: string) => Promise<void>;
 
   constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, clientName: string | undefined, groupStyle: GroupStyle, isTabReserved: (tabId: number) => boolean) {
     this.clientName = clientName;
@@ -89,6 +91,11 @@ export class ConnectedTabGroup {
     this._connection.onclose = () => this._onConnectionClose();
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
     this._connection.ontabdetached = (tabId: number) => this._onTabDetached(tabId);
+    this._connection.onsetgrouplabel = async label => {
+      if (!this.onlabelrequest)
+        throw new Error('No label handler registered for this connection');
+      await this.onlabelrequest(label);
+    };
     this._onTabUpdatedListener = this._onTabUpdated.bind(this);
     this._onTabRemovedListener = this._onTabRemoved.bind(this);
     chrome.tabs.onUpdated.addListener(this._onTabUpdatedListener);
@@ -107,6 +114,13 @@ export class ConnectedTabGroup {
 
   close(reason: string): void {
     this._connection.close(reason);
+  }
+
+  // Applies an already-deduped title (computed by the owner, see onlabelrequest) to the Chrome tab group.
+  async setTitle(title: string): Promise<void> {
+    this.groupStyle = { ...this.groupStyle, title };
+    if (this._groupId !== null)
+      await chrome.tabGroups.update(this._groupId, { title });
   }
 
   releaseTab(tabId: number): void {

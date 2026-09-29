@@ -71,6 +71,11 @@ export type ExtensionCommandV2 = {
     params: [tabIds: number | number[]];
     result: void;
   };
+  // Fork-only, Playwright-specific: relabel this connection's tab group.
+  'extension.setGroupLabel': {
+    params: [label: string];
+    result: void;
+  };
 };
 
 // Protocol v2 events mirror chrome.<api>.<event>.addListener callback signatures.

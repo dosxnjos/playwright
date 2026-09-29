@@ -60,6 +60,8 @@ export type ContextConfig = {
   };
   testIdAttribute?: string;
   webmcp?: boolean;
+  // Fork: whether the server was started in extension mode (see browser_set_group_label).
+  extension?: boolean;
   timeouts?: {
     action?: number;
     navigation?: number;
