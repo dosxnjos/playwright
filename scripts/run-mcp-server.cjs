@@ -172,10 +172,36 @@ function envForAiSession(env, origem) {
   return out;
 }
 
+// Every extension token in the vault (`PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>` in ~/.claude.json)
+// has a Chrome profile folder registered beside it (`PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>`,
+// e.g. `Profile 13`). The extension token lives in ONE profile; if the connect page opens in another
+// one (Chrome uses the last-focused profile), the connection hangs or the token is offered to the
+// wrong profile. So the profile follows the active token: swapping the token swaps the profile.
+// An explicit PLAYWRIGHT_MCP_PROFILE_DIR_NAME always wins; the legacy PLAYWRIGHT_MCP_PROFILE_DIRECTORY
+// (this fork's pre-v2 name) is honoured as a fallback. No token match -> warn, never guess.
+function envForActiveProfile(env, argv) {
+  if (!argv.includes('--extension') && env.PLAYWRIGHT_MCP_EXTENSION !== 'true' && env.PLAYWRIGHT_MCP_EXTENSION !== '1')
+    return env;
+  if (env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME)
+    return env;
+  const token = env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+  if (!token)
+    return env;
+  const prefix = 'PLAYWRIGHT_MCP_EXTENSION_TOKEN__';
+  const variant = Object.keys(env).find(key => key.startsWith(prefix) && env[key] === token);
+  const profile = (variant && env['PLAYWRIGHT_MCP_PROFILE_DIR_NAME__' + variant.slice(prefix.length)]) || env.PLAYWRIGHT_MCP_PROFILE_DIRECTORY;
+  if (!profile) {
+    log(`active extension token${variant ? ` (variant "${variant.slice(prefix.length)}")` : ''} has no Chrome profile registered (PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>): the connect page may open in the wrong profile`);
+    return env;
+  }
+  log(`Chrome profile "${profile}" chosen from the active extension token${variant ? ` (variant "${variant.slice(prefix.length)}")` : ' (legacy variable)'}`);
+  return { ...env, PLAYWRIGHT_MCP_PROFILE_DIR_NAME: profile };
+}
+
 function main() {
   const rawArgv = process.argv.slice(2);
   const argv = argvForAiSession(rawArgv, process.env.CENTRAL_ORIGEM);
-  const env = envForAiSession(process.env, process.env.CENTRAL_ORIGEM);
+  const env = envForActiveProfile(envForAiSession(process.env, process.env.CENTRAL_ORIGEM), argv);
   if (argv !== rawArgv)
     log(`CENTRAL_ORIGEM=${process.env.CENTRAL_ORIGEM}: AI-opened session, swapping extension mode for isolated headless chromium`);
   if (isForkStale()) {
@@ -193,4 +219,4 @@ function main() {
 if (require.main === module)
   main();
 
-module.exports = { argvForAiSession, envForAiSession };
+module.exports = { argvForAiSession, envForAiSession, envForActiveProfile };

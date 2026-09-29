@@ -84,6 +84,14 @@ timeout (~30 s), so the wrapper never builds inline:
 The npx fallback has no fork-only server feature (`browser_set_group_label`); the extension-side patches come from the unpacked extension, whatever server runs.
 Keep the fallback pin (`NPX_FALLBACK_ARGS`) on a version that speaks the same extension protocol as this fork.
 
+**The Chrome profile follows the active token.** Each vault token `PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>` in
+`~/.claude.json` has its profile folder registered beside it, `PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>` (`padrao` =
+`Profile 13`, `andressa` = `Profile 7`, `gabriel_pessoal` = `Default`, `jacira` = `Profile 6`). The wrapper
+(`envForActiveProfile`) finds the variant whose token equals the active `PLAYWRIGHT_MCP_EXTENSION_TOKEN` and exports
+`PLAYWRIGHT_MCP_PROFILE_DIR_NAME` for the server; an explicit value wins, the legacy `PLAYWRIGHT_MCP_PROFILE_DIRECTORY`
+is a fallback, and no match logs a warning instead of guessing. Without a profile Chrome opens the connect page in the
+last-focused profile and offers the token to the wrong one. New token = add its `__<variant>` profile line too.
+
 **AI-opened sessions never use the extension.** Sessions with `CENTRAL_ORIGEM="ia:<route>"` get
 `--browser chromium --isolated --headless` (`argvForAiSession`), and `PLAYWRIGHT_MCP_EXTENSION` is dropped from their
 env (`envForAiSession`): overnight there is no human to accept the connection and the first tool call used to hang for
