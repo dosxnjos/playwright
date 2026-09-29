@@ -162,3 +162,15 @@ Detailed guides for common development tasks:
 - **[Adding and Modifying APIs](.claude/skills/playwright-dev/api.md)** — 6-step process: define docs → implement client → define protocol → implement dispatcher → implement server → write tests
 - **[MCP Tools and CLI Commands](.claude/skills/playwright-dev/tools.md)** — `defineTool()`/`defineTabTool()`, tool capabilities, CLI `declareCommand()`, config options, testing with MCP fixtures
 - **[Vendoring Dependencies](.claude/skills/playwright-dev/vendor.md)** — bundle architecture, esbuild setup, typed wrappers, adding deps to existing bundles
+
+---
+
+## This fork (dosxnjos/playwright, branch `fork-v2`)
+
+Not part of upstream: strip this section before any PR. `fork-v2` is upstream `main` plus a small patch set
+(`browser_set_group_label`, agent tabs closed on disconnect, dark UI, run-from-source wrapper). What it carries,
+how to sync with upstream, how the wrapper and extension work, and the testing gotchas (extension tests need a
+human on Windows; unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` first): **[FORK.md](FORK.md)**.
+Plans and history: `roadmap/`. Project memory (local to this machine): `C:\Dev\cerebro\projetos\playwright.md`.
+After touching `packages/extension/src/`, also run `npx tsc -p tsconfig.json --noEmit` and
+`npx tsc -p tsconfig.ui.json --noEmit` from `packages/extension/`: `flint` skips that package.
