@@ -78,7 +78,8 @@ class PlaywrightExtension {
         const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
         // Fork: a tab picked in the connect page belongs to the user; the token-bypass
         // seed (the connect page itself) is created by the agent and closed on disconnect.
-        const seedOwner: TabOwner = message.tab ? 'user' : 'agent';
+        // Picking the connect page itself in the list is not a user tab: the agent created it.
+        const seedOwner: TabOwner = message.tab && message.tab.id !== sender.tab!.id ? 'user' : 'agent';
         this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));

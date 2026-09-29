@@ -74,6 +74,8 @@ export class RelayConnection {
   ontabdetached?: (tabId: number) => void;
   // Fork: wired by ConnectedTabGroup to apply a browser_set_group_label request.
   onsetgrouplabel?: (label: string) => Promise<void>;
+  // Fork: the user took the tab over (Cancel on the debugger bar, DevTools opened): not a page to close.
+  ontabtakenover?: (tabId: number) => void;
 
   get attachedTabs(): ReadonlySet<number> {
     return this._attachedTabs;
@@ -182,6 +184,8 @@ export class RelayConnection {
     // chrome.debugger.onDetach is the single source of truth for detach bookkeeping.
     if (fullMethod === 'chrome.debugger.onDetach') {
       const reason = args[1] as string | undefined;
+      if (reason !== 'target_closed')
+        this.ontabtakenover?.(tabId);
       this._notifyTabDetached(tabId);
       if (reason === 'target_closed' && this._maybeScheduleReattach(tabId))
         return;

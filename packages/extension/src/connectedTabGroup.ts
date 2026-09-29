@@ -92,6 +92,7 @@ export class ConnectedTabGroup {
   // The agent-created seed tab. While it still shows connect.html it may never
   // enter the group, so `_onConnectionClose` would not see it.
   private _agentSeedTabId: number | undefined;
+  private _closed = false;
   private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
@@ -107,6 +108,8 @@ export class ConnectedTabGroup {
     this._connection.onclose = () => this._onConnectionClose();
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
     this._connection.ontabdetached = (tabId: number) => this._onTabDetached(tabId);
+    // A tab the user took over is theirs from now on: ungrouped on close, never closed.
+    this._connection.ontabtakenover = (tabId: number) => this._agentOwnedTabs.delete(tabId);
     this._connection.onsetgrouplabel = async label => {
       if (!this.onlabelrequest)
         throw new Error('No label handler registered for this connection');
@@ -181,7 +184,11 @@ export class ConnectedTabGroup {
         return;
       }
       this._groupTabIds.add(tabId);
-      this._claimOwner(tabId, 'user');
+      // No pending owner: a raw user drag, except a tab opened from a tab that is already in
+      // the group (popup, ctrl+click), which Chrome drops into the opener's group and which the
+      // relay attaches on its own: agent-owned, whichever of the two events lands first.
+      const fromGroupTab = tab.openerTabId !== undefined && this._groupTabIds.has(tab.openerTabId);
+      this._claimOwner(tabId, fromGroupTab ? 'agent' : 'user');
       if (!isNonDebuggableUrl(tab.url))
         this._connection.attachTab(tab);
     } else {
@@ -224,6 +231,7 @@ export class ConnectedTabGroup {
   }
 
   private _onConnectionClose(): void {
+    this._closed = true;
     chrome.tabs.onUpdated.removeListener(this._onTabUpdatedListener);
     chrome.tabs.onRemoved.removeListener(this._onTabRemovedListener);
     const groupTabs = [...this._groupTabIds];
@@ -272,6 +280,7 @@ export class ConnectedTabGroup {
   private async _addTabToGroup(tabId: number): Promise<void> {
     if (this._groupTabIds.has(tabId))
       return;
+    const owner = this._pendingOwner.get(tabId);
     try {
       await retryOnDrag(async () => {
         if (this._groupId === null) {
@@ -281,6 +290,14 @@ export class ConnectedTabGroup {
           await chrome.tabs.group({ groupId: this._groupId, tabIds: [tabId] });
         }
       });
+      // The connection closed while the group call was in flight: nothing tracks this tab any more.
+      if (this._closed) {
+        if (owner === 'agent')
+          await chrome.tabs.remove(tabId).catch(() => {});
+        else
+          await ungroupTabs([tabId]);
+        return;
+      }
       this._groupTabIds.add(tabId);
       // Ownership must also be decided here: the group-entry event can land while
       // `_groupId` is still null (first tab) or after this add, so
@@ -291,6 +308,8 @@ export class ConnectedTabGroup {
       this._claimOwner(tabId, undefined);
     } catch (error: any) {
       debugLog('Error adding tab to group:', error);
+      // Never grouped, so a stale 'agent' must not be consumed by a later user drag.
+      this._pendingOwner.delete(tabId);
     }
   }
 

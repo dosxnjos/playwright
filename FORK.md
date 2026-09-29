@@ -28,6 +28,20 @@ an error if `--extension` was requested but no relay is connected.
 Profile pinning is **not** a fork feature any more: use upstream's `--profile-dir-name` /
 `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` (takes the profile **folder**, e.g. `Profile 13`).
 
+Ownership edge cases (found by the adversarial review, 28/09/2026): a tab the user takes over (Cancel on the debugger
+bar, DevTools opened) is demoted to user-owned and never closed; a tab opened from a tab already in the group is
+agent-owned whichever event lands first; a tab whose group call finishes after the connection closed is closed or
+ungrouped by its owner. Not covered by any test (extension tests do not run on Windows): check by hand.
+
+## Known limitations
+
+- `browser_set_group_label` errors with `--extension --shared-browser-context`: that mode reconnects through another
+  `Browser` object, so the registry lookup misses.
+- Wrapper (`scripts/run-mcp-server.cjs`), inherited from the old fork: a `.build-lock` left by a killed background build
+  is never expired (delete it by hand); `.build-stamp` gets the mtime of the build's end, so an edit made during the
+  ~25 s build counts as built; the npx fallback runs with `shell: true` and unquoted args, so an arg containing a space
+  splits in two there.
+
 ## Syncing with upstream
 
 `origin` = `dosxnjos/playwright`, `upstream` = `microsoft/playwright`. Never a cron rebase (patches can conflict).
