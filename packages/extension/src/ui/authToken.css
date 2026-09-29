@@ -16,14 +16,15 @@
 
 .auth-token-section {
   margin: 16px 0;
-  padding: 16px;
-  background-color: #f6f8fa;
-  border-radius: 6px;
+  padding: 14px;
+  background-color: var(--curtain);
+  border: 1px solid var(--curtain-line);
+  border-radius: var(--radius-sm);
 }
 
 .auth-token-description {
   font-size: 12px;
-  color: #656d76;
+  color: var(--marquee-dim);
   margin-bottom: 12px;
 }
 
@@ -31,14 +32,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background-color: #ffffff;
+  background-color: var(--curtain-raised);
+  border: 1px solid var(--curtain-line);
+  border-radius: var(--radius-sm);
   padding: 8px;
 }
 
 .auth-token-code {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: #1f2328;
+  color: var(--marquee);
   border: none;
   flex: 1;
   padding: 0;
@@ -51,7 +54,7 @@
   width: 24px;
   border: none;
   outline: none;
-  color: var(--color-fg-muted);
+  color: var(--marquee-dim);
   background: transparent;
   padding: 4px;
   cursor: pointer;
@@ -66,7 +69,7 @@
 }
 
 .auth-token-refresh:not(:disabled):hover {
-  background-color: var(--color-btn-selected-bg);
+  background-color: var(--curtain-line);
 }
 
 .auth-token-example-section {
@@ -81,7 +84,7 @@
   border: none;
   padding: 8px 0;
   font-size: 12px;
-  color: #656d76;
+  color: var(--marquee-dim);
   cursor: pointer;
   outline: none;
   text-align: left;
@@ -89,7 +92,7 @@
 }
 
 .auth-token-example-toggle:hover {
-  color: #1f2328;
+  color: var(--marquee);
 }
 
 .auth-token-chevron {
@@ -120,7 +123,7 @@
 
 .auth-token-example-description {
   font-size: 12px;
-  color: #656d76;
+  color: var(--marquee-dim);
   margin-bottom: 12px;
 }
 
@@ -128,14 +131,16 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  background-color: #ffffff;
+  background-color: var(--curtain-raised);
+  border: 1px solid var(--curtain-line);
+  border-radius: var(--radius-sm);
   padding: 12px;
 }
 
 .auth-token-example-code {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: #1f2328;
+  color: var(--marquee);
   white-space: pre;
   flex: 1;
   line-height: 1.4;

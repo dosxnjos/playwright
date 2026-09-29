@@ -154,9 +154,16 @@ const ConnectApp: React.FC = () => {
     }
   }, []);
 
+  const lightState = status?.type === 'connected' ? 'connected' : status?.type === 'error' ? 'error' : 'connecting';
+
   return (
     <div className='app-container'>
       <div className='content-wrapper'>
+        <div className='stage-mark'>
+          <span className={`ghost-light ${lightState}`} />
+          Playwright Extension
+        </div>
+
         {status && (
           <div className='status-container'>
             <StatusBanner status={status} />
