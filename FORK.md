@@ -42,6 +42,33 @@ ungrouped by its owner. Not covered by any test (extension tests do not run on W
   ~25 s build counts as built; the npx fallback runs with `shell: true` and unquoted args, so an arg containing a space
   splits in two there.
 
+## Setting this up on another machine (macOS or Windows)
+
+Everything is in this public repo; nothing secret is. Each machine has **its own** extension token (it lives in the
+Chrome profile's extension storage): never copy someone else's.
+
+```bash
+git clone -b fork-v2 https://github.com/dosxnjos/playwright.git && cd playwright
+npm ci && npm run build && touch scripts/.build-stamp     # ~25 s; Node 20+
+```
+
+1. Chrome -> `chrome://extensions` -> Developer mode -> "Load unpacked" -> `packages/extension/dist`. If the Chrome Web
+   Store copy is installed in that profile, disable it first (same extension ID). Open the extension's page in that
+   profile and copy its token.
+2. Claude Code MCP config (`~/.claude.json` -> `mcpServers.playwright`, or `claude mcp add`): `command` `node`, `args`
+   `["<clone>/scripts/run-mcp-server.cjs", "--extension", "--browser", "chrome"]`, `env`
+   `PLAYWRIGHT_MCP_EXTENSION_TOKEN=<that token>`. With several Chrome profiles also set
+   `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` to the profile folder that holds the extension (`Default`, `Profile 1`...), or the
+   connect page may open in the wrong profile. Restart Claude Code.
+3. The first launch after a `git pull` uses the official npx server while the wrapper rebuilds in the background; run
+   `npm run build && touch scripts/.build-stamp` yourself to skip that.
+
+On macOS `--load-extension` is ignored by branded Chrome 137+ like on Windows, so use the manual "Load unpacked".
+The `tests/extension/` suite is the one that runs on macOS (it is what upstream's CI uses).
+
+Without any of the fork's features (no tab-group label, agent tabs only ungrouped, no dark UI) the official route is
+enough: install the Chrome Web Store extension and run `npx @playwright/mcp@latest --extension`.
+
 ## Syncing with upstream
 
 `origin` = `dosxnjos/playwright`, `upstream` = `microsoft/playwright`. Never a cron rebase (patches can conflict).
