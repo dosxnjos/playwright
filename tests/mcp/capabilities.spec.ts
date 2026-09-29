@@ -40,6 +40,7 @@ test('test snapshot tool list', async ({ client }) => {
     'browser_press_key',
     'browser_resize',
     'browser_run_code_unsafe',
+    'browser_set_group_label',
     'browser_snapshot',
     'browser_tabs',
     'browser_take_screenshot',

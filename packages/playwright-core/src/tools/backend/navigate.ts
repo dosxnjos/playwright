@@ -23,7 +23,7 @@ const navigate = defineTool({
   schema: {
     name: 'browser_navigate',
     title: 'Navigate to a URL',
-    description: 'Navigate to a URL',
+    description: 'Navigate to a URL. Acts on this connection\'s current tab (see browser_tabs) — if none exists yet, creates one and makes it current.',
     inputSchema: z.object({
       url: z.string().describe('The URL to navigate to'),
     }),
