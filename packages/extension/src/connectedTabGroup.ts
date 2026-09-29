@@ -29,6 +29,13 @@ export function isNonDebuggableUrl(url: string | undefined): boolean {
 
 type GroupColor = `${chrome.tabGroups.Color}`;
 
+// Fork: who a tab belongs to when its connection closes. Agent-owned tabs (the
+// agent created them: token-bypass seed, popups, browser_tabs new,
+// Target.createTarget) are closed, since leaving them open leaks a tab every time
+// a client dies. User-owned tabs (picked in the connect page, or dragged into
+// the group) are only ungrouped: closing a page the user brought in is destructive.
+export type TabOwner = 'agent' | 'user';
+
 export type GroupStyle = {
   title: string;
   color: GroupColor;
@@ -76,6 +83,15 @@ export class ConnectedTabGroup {
   private _isTabReserved: (tabId: number) => boolean;
   private _groupId: number | null = null;
   private _groupTabIds: Set<number> = new Set();
+  // Fork: ownership is decided once, when a tab enters the group (never on a later
+  // re-attach, so a navigation can't promote a user's tab to agent-owned).
+  private _agentOwnedTabs: Set<number> = new Set();
+  // Owner intended for the next tab entering the group through an agent-initiated
+  // path (seed tab, relay attach). A group entry with no pending owner is a user drag.
+  private _pendingOwner: Map<number, TabOwner> = new Map();
+  // The agent-created seed tab. While it still shows connect.html it may never
+  // enter the group, so `_onConnectionClose` would not see it.
+  private _agentSeedTabId: number | undefined;
   private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
@@ -83,7 +99,7 @@ export class ConnectedTabGroup {
   // Fork: asks the owner (which sees every connection) for the deduped title of a client-supplied label.
   onlabelrequest?: (label: string) => Promise<void>;
 
-  constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, clientName: string | undefined, groupStyle: GroupStyle, isTabReserved: (tabId: number) => boolean) {
+  constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, clientName: string | undefined, groupStyle: GroupStyle, isTabReserved: (tabId: number) => boolean, seedOwner: TabOwner) {
     this.clientName = clientName;
     this.groupStyle = groupStyle;
     this._isTabReserved = isTabReserved;
@@ -100,6 +116,11 @@ export class ConnectedTabGroup {
     this._onTabRemovedListener = this._onTabRemoved.bind(this);
     chrome.tabs.onUpdated.addListener(this._onTabUpdatedListener);
     chrome.tabs.onRemoved.addListener(this._onTabRemovedListener);
+    // 'agent' when no tab was picked (token bypass), 'user' when the connect page's picker chose one.
+    if (selectedTab.id !== undefined)
+      this._pendingOwner.set(selectedTab.id, seedOwner);
+    if (seedOwner === 'agent')
+      this._agentSeedTabId = selectedTab.id;
     // Seed the relay with the user-selected tab, then close out the initial
     // handshake. The relay holds Playwright-side CDP traffic until
     // `didInitialize` arrives, so it sees a fully populated tab model by the
@@ -127,6 +148,7 @@ export class ConnectedTabGroup {
     if (!this._groupTabIds.has(tabId))
       return;
     this._groupTabIds.delete(tabId);
+    this._agentOwnedTabs.delete(tabId);
     this._connection.detachTab(tabId);
   }
 
@@ -159,10 +181,12 @@ export class ConnectedTabGroup {
         return;
       }
       this._groupTabIds.add(tabId);
+      this._claimOwner(tabId, 'user');
       if (!isNonDebuggableUrl(tab.url))
         this._connection.attachTab(tab);
     } else {
       this._groupTabIds.delete(tabId);
+      this._agentOwnedTabs.delete(tabId);
       if (this._connection.attachedTabs.has(tabId))
         this._connection.detachTab(tabId);
     }
@@ -170,10 +194,25 @@ export class ConnectedTabGroup {
 
   private _onTabRemoved(tabId: number): void {
     this._groupTabIds.delete(tabId);
+    this._agentOwnedTabs.delete(tabId);
+    this._pendingOwner.delete(tabId);
+  }
+
+  // Consumes the pending owner of a tab that just entered the group (or
+  // `fallback` when there is none) and records agent ownership.
+  private _claimOwner(tabId: number, fallback: TabOwner | undefined): void {
+    const owner = this._pendingOwner.get(tabId) ?? fallback;
+    this._pendingOwner.delete(tabId);
+    if (owner === 'agent')
+      this._agentOwnedTabs.add(tabId);
   }
 
   private _onTabAttached(tabId: number): void {
     void this._updateBadge(tabId, CONNECTED_BADGE);
+    // A relay-initiated attach is agent-owned by default, unless the seed's
+    // owner is already pending or the tab is already a member (re-attach).
+    if (!this._groupTabIds.has(tabId) && !this._pendingOwner.has(tabId))
+      this._pendingOwner.set(tabId, 'agent');
     void this._addTabToGroup(tabId);
   }
 
@@ -188,9 +227,29 @@ export class ConnectedTabGroup {
     chrome.tabs.onUpdated.removeListener(this._onTabUpdatedListener);
     chrome.tabs.onRemoved.removeListener(this._onTabRemovedListener);
     const groupTabs = [...this._groupTabIds];
+    const agentOwnedTabs = groupTabs.filter(id => this._agentOwnedTabs.has(id));
+    const userOwnedTabs = groupTabs.filter(id => !this._agentOwnedTabs.has(id));
     this._groupTabIds.clear();
-    if (groupTabs.length)
-      void ungroupTabs(groupTabs);
+    this._agentOwnedTabs.clear();
+    this._pendingOwner.clear();
+    if (userOwnedTabs.length)
+      void ungroupTabs(userOwnedTabs);
+    if (agentOwnedTabs.length) {
+      retryOnDrag(() => chrome.tabs.remove(agentOwnedTabs)).catch(error => {
+        debugLog('Error closing agent-owned tabs on close:', error);
+      });
+    }
+    // Agent seed still on connect.html: never entered the group, so it is not in `groupTabs`.
+    const seedTabId = this._agentSeedTabId;
+    this._agentSeedTabId = undefined;
+    if (seedTabId !== undefined && !groupTabs.includes(seedTabId)) {
+      chrome.tabs.get(seedTabId).then(tab => {
+        if (tab.url?.startsWith(chrome.runtime.getURL('connect.html')))
+          return chrome.tabs.remove(seedTabId);
+      }).catch(error => {
+        debugLog('Error closing agent seed tab on close:', error);
+      });
+    }
     this.onclose?.();
   }
 
@@ -223,6 +282,13 @@ export class ConnectedTabGroup {
         }
       });
       this._groupTabIds.add(tabId);
+      // Ownership must also be decided here: the group-entry event can land while
+      // `_groupId` is still null (first tab) or after this add, so
+      // `_onTabGroupChanged` returns early and never consumes the pending owner,
+      // and every agent tab, the seed included, would end up merely ungrouped.
+      // Only consumes a pending entry, so a tab `_onTabGroupChanged` already
+      // decided keeps its owner.
+      this._claimOwner(tabId, undefined);
     } catch (error: any) {
       debugLog('Error adding tab to group:', error);
     }

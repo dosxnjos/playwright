@@ -18,6 +18,8 @@ import { debugLog } from './relayConnection';
 import { PendingConnections } from './pendingConnection';
 import { ConnectedTabGroup, cleanupStalePlaywrightGroups, isNonDebuggableUrl, ungroupTabs, uniqueGroupStyle } from './connectedTabGroup';
 
+import type { TabOwner } from './connectedTabGroup';
+
 type PageMessage = {
   type: 'connectionRequested';
   mcpRelayUrl: string;
@@ -74,7 +76,10 @@ class PlaywrightExtension {
         // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
         // message sender, where `id` is always defined.
         const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName).then(
+        // Fork: a tab picked in the connect page belongs to the user; the token-bypass
+        // seed (the connect page itself) is created by the agent and closed on disconnect.
+        const seedOwner: TabOwner = message.tab ? 'user' : 'agent';
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
@@ -99,7 +104,7 @@ class PlaywrightExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner): Promise<void> {
     try {
       await this._cleanupPromise;
       this._releaseTab(selectorTabId);
@@ -112,7 +117,7 @@ class PlaywrightExtension {
 
       const id = ++this._lastConnectionId;
       const taken = [...this._connections.values()].map(group => group.groupStyle);
-      const group = new ConnectedTabGroup(connection, tab, clientName, uniqueGroupStyle(clientName, taken), tabId => this._pendingConnections.has(tabId));
+      const group = new ConnectedTabGroup(connection, tab, clientName, uniqueGroupStyle(clientName, taken), tabId => this._pendingConnections.has(tabId), seedOwner);
       group.onclose = () => this._connections.delete(id);
       group.onlabelrequest = label => {
         const others = [...this._connections].filter(([otherId]) => otherId !== id).map(([, other]) => other.groupStyle);
