@@ -157,6 +157,13 @@ export class CDPRelayServer {
     const userDataDir = process.env.PWTEST_EXTENSION_USER_DATA_DIR;
     if (userDataDir)
       args.push(`--user-data-dir=${userDataDir}`);
+    // Pins the connect page to one Chrome profile (e.g. "Profile 13"). Without
+    // it Chrome opens the page in the last focused profile, whose extension may
+    // hold a different token than PLAYWRIGHT_MCP_EXTENSION_TOKEN. An already
+    // running Chrome honours the flag and opens the page in that profile.
+    const profileDirectory = process.env.PLAYWRIGHT_MCP_PROFILE_DIRECTORY;
+    if (profileDirectory)
+      args.push(`--profile-directory=${profileDirectory}`);
     if (os.platform() === 'linux' && channel === 'chromium')
       args.push('--no-sandbox');
     args.push(href);

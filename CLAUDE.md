@@ -301,6 +301,19 @@ from that one config entry.
 state (gitignored) — safe to delete by hand at any time to force the next launch to treat the
 fork as stale and rebuild.
 
+⚠️ A manual `npm run build` does **not** refresh `.build-stamp`: run `touch
+scripts/.build-stamp` afterwards, or the next launch still counts as stale and runs the upstream
+npx package.
+
+### Pinning the Chrome profile: `PLAYWRIGHT_MCP_PROFILE_DIRECTORY` (28/09/2026)
+
+`cdpRelay.ts` spawns `chrome.exe <connect.html>` with no profile, so Chrome opens it in the last
+profile that opened a tab; if that profile's extension holds another token, the connection hangs
+until someone pastes the link into the right profile. Setting `PLAYWRIGHT_MCP_PROFILE_DIRECTORY`
+(e.g. `Profile 13`) adds `--profile-directory=`: a running Chrome opens a tab in that profile's
+window. Fork-only (the npx fallback ignores it). Used by `C:\Dev\controle-gastos`; details in
+`C:\Dev\cerebro\temas\playwright-mcp.md` § Perfil do Chrome.
+
 ### Keeping up with upstream (rebase routine)
 
 `upstream` (`https://github.com/microsoft/playwright.git`) is separate from `origin`
