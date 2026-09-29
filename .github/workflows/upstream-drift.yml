@@ -1,0 +1,61 @@
+name: upstream drift
+
+# Fork-only. Weekly, read-only check: how far fork-v2 is behind microsoft/playwright and whether
+# rebasing it would conflict. It never syncs anything: it only opens (or updates) one issue.
+# Scheduled workflows run from the default branch (main), so this file has to live there.
+# Free on a public repo. GitHub disables schedules after 60 days without repo activity.
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  BEHIND_THRESHOLD: 25
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fork-v2
+          fetch-depth: 0
+      - name: Measure drift
+        id: drift
+        run: |
+          git remote add upstream https://github.com/microsoft/playwright.git
+          git fetch --quiet upstream main
+          behind=$(git rev-list --count HEAD..upstream/main)
+          git config user.email "drift-check@users.noreply.github.com"
+          git config user.name "drift-check"
+          git switch --quiet -c drift-probe
+          if git rebase upstream/main >/dev/null 2>&1; then
+            conflicts=no
+          else
+            conflicts=yes
+            git rebase --abort || true
+          fi
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "conflicts=$conflicts" >> "$GITHUB_OUTPUT"
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+      - name: Open or update the issue
+        if: steps.drift.outputs.conflicts == 'yes' || fromJSON(steps.drift.outputs.behind) >= fromJSON(env.BEHIND_THRESHOLD)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEHIND: ${{ steps.drift.outputs.behind }}
+          CONFLICTS: ${{ steps.drift.outputs.conflicts }}
+          UPSTREAM: ${{ steps.drift.outputs.upstream }}
+        run: |
+          title="fork-v2 drifted from upstream"
+          body="fork-v2 is **${BEHIND}** commits behind microsoft/playwright (upstream/main @ ${UPSTREAM}). Rebase would conflict: **${CONFLICTS}**. Routine: FORK.md § Syncing with upstream. Checked $(date -u +%F)."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

@@ -52,6 +52,10 @@ git rebase upstream/main          # on fork-v2
 npm ci && npm run build && touch scripts/.build-stamp
 ```
 
+`.github/workflows/upstream-drift.yml` runs weekly (Mon 12:00 UTC) and only opens/updates one issue when `fork-v2` is
+25+ commits behind or a rebase would conflict; it never syncs. Schedules run from the default branch (`main`), and GitHub
+disables them after 60 days without repo activity (re-enable in the Actions tab).
+
 Likely conflicts: `backend/tools.ts` (keep both tool lists), `tests/mcp/capabilities.spec.ts` (keep
 `browser_set_group_label` in the list), `.github/workflows/*` (modify/delete: `git rm` again), `ui/connect.css`.
 Then check: `npm run ctest-mcp -- group-label capabilities tabs core`, plus from `packages/extension/`
