@@ -17,7 +17,7 @@
 
 import * as z from 'zod';
 import { defineTool } from './tool';
-import { extensionRelayFor } from '../utils/extensionSession';
+import { extensionRelayFor } from './extensionSession';
 
 const setGroupLabel = defineTool({
   capability: 'core',

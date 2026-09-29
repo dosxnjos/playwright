@@ -21,7 +21,7 @@ import { defaultUserDataDirForChannel } from '@utils/chromiumChannels';
 import { playwright } from '../../inprocess';
 import { findPlaywrightExtensionProfile, isExtensionInstalledInProfile, playwrightExtensionInstallUrl } from '../utils/extension';
 import { CDPRelayServer } from './cdpRelay';
-import { registerExtensionRelay } from '../utils/extensionSession';
+import { registerExtensionRelay } from '../backend/extensionSession';
 
 import type * as playwrightTypes from '../../..';
 
