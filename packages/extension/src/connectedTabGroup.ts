@@ -73,6 +73,12 @@ export class ConnectedTabGroup {
   // group-entry with no pending entry (typically a user drag) defaults to
   // 'user'.
   private _pendingOwner: Map<number, TabOwner> = new Map();
+  // The seed tab, when the agent created it (token/newTab path). While it
+  // still shows connect.html it is non-debuggable, so it never enters the
+  // group and `_onConnectionClose` would not see it: a session that
+  // reconnects and ends before navigating left a "connected" orphan tab
+  // behind (observed 2026-09-28).
+  private _agentSeedTabId: number | undefined;
   private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
@@ -100,6 +106,8 @@ export class ConnectedTabGroup {
     // tab — see PlaywrightExtension._connectTab.
     if (selectedTab.id !== undefined)
       this._pendingOwner.set(selectedTab.id, seedOwner);
+    if (seedOwner === 'agent')
+      this._agentSeedTabId = selectedTab.id;
     // Seed the relay with the user-selected tab, then close out the initial
     // handshake. The relay holds Playwright-side CDP traffic until
     // `didInitialize` arrives, so it sees a fully populated tab model by the
@@ -230,6 +238,19 @@ export class ConnectedTabGroup {
         debugLog('Error closing agent-owned tabs on close:', error);
       });
     }
+    // Agent seed that never navigated away from connect.html (see
+    // `_agentSeedTabId`). Only while it is still the connect page: once it
+    // navigated it is a group member and was handled above.
+    const seedTabId = this._agentSeedTabId;
+    this._agentSeedTabId = undefined;
+    if (seedTabId !== undefined && !groupTabs.includes(seedTabId)) {
+      chrome.tabs.get(seedTabId).then(tab => {
+        if (tab.url?.startsWith(chrome.runtime.getURL('connect.html')))
+          return chrome.tabs.remove(seedTabId);
+      }).catch(error => {
+        debugLog('Error closing agent seed tab on close:', error);
+      });
+    }
     this.onclose?.();
   }
 
@@ -261,7 +282,23 @@ export class ConnectedTabGroup {
           await chrome.tabs.group({ groupId: this._groupId, tabIds: [tabId] });
         }
       });
+      // Ownership must be decided here too, not only in `_onTabGroupChanged`:
+      // the group-entry event can land while `_groupId` is still null (the
+      // first tab creates the group, and the event fires before
+      // `chrome.tabs.group` resolves) or after the add below. Either way
+      // `_onTabGroupChanged` returns early and never consumes the pending
+      // owner, so the seed always ended up 'user' - ungrouped, never closed,
+      // on disconnect (measured 2026-09-28: seed in the group while
+      // connected, ungrouped and still open after close). Only consumes a
+      // pending entry, so a tab `_onTabGroupChanged` already decided keeps
+      // its owner.
       this._groupTabIds.add(tabId);
+      const owner = this._pendingOwner.get(tabId);
+      if (owner !== undefined) {
+        this._pendingOwner.delete(tabId);
+        if (owner === 'agent')
+          this._agentOwnedTabs.add(tabId);
+      }
     } catch (error: any) {
       debugLog('Error adding tab to group:', error);
     }

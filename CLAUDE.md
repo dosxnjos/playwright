@@ -156,6 +156,10 @@ Detailed guides for common development tasks:
 
 ## This fork (dosxnjos/playwright, branch `extension-multi-connection`)
 
+⚠️ **`main` is the live branch (28/09/2026)**: it is what is checked out, built and run by
+`scripts/run-mcp-server.cjs`. `extension-multi-connection` holds one unmerged, never-validated
+commit (`6f0b4cfdc`, ghost-tab fixes 9–13 from `roadmap/2026-07-17-melhoria-reconexao-aba-fantasma.md`).
+
 **Not part of upstream — strip this section before the PR.** Fork of `microsoft/playwright`
 to fix [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893): the
 Playwright Extension only sustains one connection at a time, so running several Claude Code
