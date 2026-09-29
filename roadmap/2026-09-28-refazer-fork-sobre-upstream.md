@@ -89,7 +89,7 @@ soltas), o rótulo de grupo e o tema escuro.
   grupo **e** no `_addTabToGroup` (a corrida de `cb20e93da`), fechar a semente
   do agente que ainda estiver no `connect.html`. Teste: a sonda de
   `cerebro/temas/playwright-mcp.md` § Semente órfã (zero sobras).
-- [ ] 6. (parcial: env nativa passada lado a lado no coletor; falta apagar a antiga e migrar o `~/.claude.json` no passo 8) Perfil: apagar o `PLAYWRIGHT_MCP_PROFILE_DIRECTORY` nosso e migrar para
+- [x] 6. (feito 29/09: env nativa no coletor; a antiga saiu do coletor e do `~/.claude.json`; o perfil agora deriva do token ativo no wrapper) Perfil: apagar o `PLAYWRIGHT_MCP_PROFILE_DIRECTORY` nosso e migrar para
   o nativo `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` em
   `C:\Dev\controle-gastos\coleta_billing_v4.py` (`sessao()`) e no `env` do
   `mcpServers.playwright` do `~/.claude.json`. Conferir se o nativo usa o nome
@@ -97,7 +97,7 @@ soltas), o rótulo de grupo e o tema escuro.
 - [x] 7. Portar o tema escuro (`connect.css`/`status` e o que `cb9c2f5f3`,
   `b7e034d3e`, `2172490cd` mudaram), sobre a UI atual do upstream. Subir a
   versão do `manifest.json`.
-- [ ] 8. Validação ao vivo e virada. **Achado do advisor (28/09):** os perfis 13 e 7 carregam a extensão
+- [x] 8. (feito 29/09: virada, sessão nova conectou no Profile 13 com rótulo, sonda das duas contas conectou em ~1 s, `main` = `fork-v2` local e no `origin`, tags publicadas) Validação ao vivo e virada. **Achado do advisor (28/09):** os perfis 13 e 7 carregam a extensão
   descompactada de `C:\Dev\playwright\packages\extension\dist` (medido no `Secure Preferences`), e
   `~/.claude.json` e `MCP_SCRIPT` do coletor apontam para `C:\Dev\playwright\scripts\...`. Recarregar a
   extensão hoje carregaria o build **velho**; servidor e extensão têm de virar juntos (o comando de rótulo
@@ -115,12 +115,12 @@ soltas), o rótulo de grupo e o tema escuro.
      a ref `main` (`git branch -f main fork-v2` local). Publicar (push das duas tags e depois `main` com
      `--force-with-lease`) é **push em repo público, autorização própria a cada vez**.
   **Reversão:** `git switch main`, `npm ci && npm run build && touch scripts/.build-stamp`, recarregar a extensão.
-- [ ] 9. Rotina de sincronização: documentar no `CLAUDE.md` do fork (fetch
+- [x] 9. (feito 29/09: `FORK.md` + `.github/workflows/upstream-drift.yml`; falta ativar as Actions no GitHub) Rotina de sincronização: documentar no `CLAUDE.md` do fork (fetch
   upstream → rebase de `fork-v2` → build → testes). **Proposta a decidir com o
   Gabriel:** uma Action semanal gratuita que só **avisa** (issue no fork) quando
   o upstream andou N commits ou o rebase conflita. Sincronizar sozinha não dá,
   porque o fork carrega patches.
-- [ ] 10. Docs: seção "This fork" do `CLAUDE.md`, `cerebro/temas/playwright-mcp.md`,
+- [x] 10. (feito 29/09) Docs: seção "This fork" do `CLAUDE.md`, `cerebro/temas/playwright-mcp.md`,
   hub `cerebro/projetos/playwright.md`, diário.
 
 ## O que o pedido não dizia
@@ -211,3 +211,19 @@ Fora do repo: `controle-gastos/coleta_billing_v4.py`.
 - Sem dono humano, para a próxima sessão: diário e hubs do cérebro (passo 10) depois da virada; apagar a env antiga
   (passo 6/8); eventual teste real dos ajustes de posse.
 - Nenhuma decisão de negócio (Andressa).
+
+## Relatório de execução — passos 8-10 (2026-09-29, sessão 1d0851c4)
+
+- Virada com o Gabriel: sessões fechadas, backup do `.gitignore` sujo (`temp/gitignore-sujo-2026-09-29.patch`),
+  `git worktree remove`, `git switch fork-v2` em `C:\Dev\playwright`, `npm ci` + build + stamp. Sonda do wrapper ok.
+- Falha achada ao vivo e corrigida: o `~/.claude.json` só tinha a env de perfil antiga, que o v2 não lê; a
+  conexão foi para o perfil errado (o Gabriel barrou a chamada). Sistematizado: `PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variante>`
+  ao lado de cada token do cofre e `envForActiveProfile` no wrapper (6 casos testados; commit `b2057ab91`). Env antiga apagada
+  do `~/.claude.json` (backup no scratchpad) e do coletor (`ae46a5f`, `50aae28` no controle-gastos).
+- Prova ao vivo: sessão nova, `browser_set_group_label` -> "Tab group label set", `browser_navigate`, `browser_tabs new`;
+  sonda das duas contas do coletor (`Profile 7` e `Profile 13`): rótulo aplicado e listagem de abas ok, 1,3 s e 1,1 s.
+  Visual (grupo no perfil certo, tema escuro) e "zero abas sobrando" dependem da conferência do Gabriel.
+- Não rodado: `run_billing.bat` (produção, exige o Gabriel no console por causa da guarda de identidade).
+- Publicado (autorizado pelo Gabriel): tags, `fork-v2` e `main` com `--force-with-lease` sobre `88dc32769`. O `origin/main` antigo
+  ficou preservado na tag `fork-pre-refazer-2026-09-28`.
+- Pendências: ativar as Actions do fork no GitHub (só ele); conferir "zero abas sobrando"; `run_billing.bat` no dia 6.
