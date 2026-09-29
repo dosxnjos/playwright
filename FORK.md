@@ -99,8 +99,8 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
 
 - **`tests/extension/` needs a human on Windows.** The connect flow relies on Chrome's OS-level singleton (relaunching
   the same `chrome.exe`/`--user-data-dir` opens a tab in the existing window); on Windows the tests hang at 30 s and
-  ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (push-triggered, free on a
-  public repo) and a live check. `tests/mcp/` runs fine locally (`npm run ctest-mcp`).
+  ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (push to `main` or `fork-v2`
+  with paths under `packages/extension/`, `tests/extension/` or `tools/`; free on a public repo) and a live check. `tests/mcp/` runs fine locally (`npm run ctest-mcp`).
 - ⚠️ **Unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` (and `PLAYWRIGHT_MCP_EXTENSION`) before running extension tests.** If the
   shell has the real token exported, the test server sends it to the test browser's extension and the connect page shows
   "Invalid token provided.": `env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN npm run test-extension -- <filter>`.
