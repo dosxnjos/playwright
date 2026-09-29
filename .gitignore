@@ -42,3 +42,12 @@ playwright.env
 /firefox/
 .playwright/
 .npmrc
+
+# fork: estado local do wrapper scripts/run-mcp-server.cjs
+/scripts/.build-stamp
+/scripts/.build-lock
+/scripts/.build-log.txt
+# log de debug do MCP server: registra args da linha de comando, incluindo o token da extensão
+/scripts/.mcp-debug-log.txt
+/scripts/.mcp-debug-log.old.txt
+/temp/
