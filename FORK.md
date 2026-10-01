@@ -85,8 +85,15 @@ git push --force-with-lease origin main   # the rebase rewrites main; needs the 
 25+ commits behind or a rebase would conflict; it never syncs. Schedules run from the default branch (`main`), and GitHub
 disables them after 60 days without repo activity (re-enable in the Actions tab).
 
+⚠️ The checkout usually has someone's uncommitted `roadmap/*.md` edits, so `git rebase` refuses and `--autostash` is
+off-limits (the stash is shared between sessions). Rehearse instead: `git worktree add -b ensaio-sync <dir> main`, rebase
+and test there, then move the real checkout with `git reset --keep ensaio-sync` (keeps those edits when `roadmap/` is
+the same on both sides). Rebuilding with `npm run build` is enough when `package-lock.json` barely moved; `npm ci`
+wipes `node_modules` under MCP servers that other sessions are running from this checkout.
+
 Likely conflicts: `backend/tools.ts` (keep both tool lists), `tests/mcp/capabilities.spec.ts` (keep
-`browser_set_group_label` in the list), `.github/workflows/*` (modify/delete: `git rm` again), `ui/connect.css`.
+`browser_set_group_label` in the list), `.github/workflows/*` (modify/delete: `git rm` again; also drop any new
+workflow with an automatic trigger, e.g. `check_copilot_models.yml` on 01/10/2026), `ui/connect.css`.
 Then check: `npm run ctest-mcp -- group-label capabilities tabs core`, plus from `packages/extension/`
 `npx tsc -p tsconfig.json --noEmit` and `npx tsc -p tsconfig.ui.json --noEmit`.
 
