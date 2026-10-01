@@ -84,3 +84,45 @@ Nenhuma recomendação foi derrubada: em todos os itens o cético manteve a reco
 
   Não resolvi isso; precisa conferir com git antes do próximo rebase.
   **Resolvido na sessão (01/10, `git rev-list --left-right --count upstream/main...main`):** `main` está 18 commits à frente (os 5 patches + docs/roadmaps do fork + o cherry-pick do #43037) e 34 atrás do upstream. Todas as leituras acima são verdadeiras ao mesmo tempo.
+
+## Plano de execução (01/10, autorizado pelo Gabriel: "faz tudo o que achar pertinente", maestro segue pausado)
+
+1. Preparar em paralelo (workflow, sem publicar nada): (a) issue dos erros de tsc da extensão, com os erros
+   reproduzidos em `upstream/main`; (b) PR de caminhos velhos da skill `playwright-dev`, branch a partir de
+   `upstream/main` em worktree próprio, cada caminho novo conferido; (c) rascunhos das 2 issues espaçadas
+   (`--extension` silenciado; testes herdando `PLAYWRIGHT_MCP_*`), para enviar dias depois; (d) ensaio do sync
+   do fork (rebase da `main` sobre `upstream/main` num worktree descartável: conflitos, build, testes).
+   Cada peça passa por revisor cético.
+2. Publicar pela conta `dosxnjos` (troca e volta do `gh` no mesmo comando): (a) issue; (b) PR.
+3. Testar o `upstream-drift.yml` agora que as issues do fork estão ligadas (`workflow_dispatch`).
+4. Sync real do fork: só se o ensaio (d) sair limpo e sem risco à extensão carregada nos perfis do Chrome;
+   senão, fica proposto com o relatório do ensaio.
+5. Fora do alcance: apagar branches remotas (`push --delete` bloqueado pela permissão) → Gabriel pelo GitHub.
+
+## Relatório de execução (01/10)
+
+Preparo: workflow `upstream-preparo-playwright` (8 agentes, executor + revisor cético por frente).
+
+- **(a) issue tsc → [#43050](https://github.com/microsoft/playwright/issues/43050).** 3 erros reproduzidos em
+  `upstream/main` 87291ca60 (`TabChangeInfo` ×2, tupla do `ungroup`), causa #41497 (`@types/chrome` 0.2.0) + exclude do
+  #40429; sem duplicata. Revisor aprovou; ajustes aplicados (o eslint carrega os tsconfigs mas não faz typecheck; o
+  exclude foi deliberado, citado em vez de suposto). Fix pronto e **não publicado**: worktree `C:\Dev\pw-up-tsc`, branch
+  `fix-ext-tsc`, commit `54a61ffa1` (+5/−3). Só vira PR depois que a issue for atribuída; rebasear antes.
+- **(b) PR skill → [#43051](https://github.com/microsoft/playwright/pull/43051)** (branch `docs-playwright-dev-paths`,
+  worktree `C:\Dev\pw-up-docs`). Revisor reprovou a 1ª versão (`exports.ts` foi renomeado para `index.ts`, não apagado;
+  `CLAUDE.md` dizia `channels.d.ts` no pacote protocol; gramática; corpo omitia 2 typos); corrigido em commit novo
+  `0eb140be3` (sem amend). Ficou de fora de propósito: `PageGotoParams` como exemplo conceitual no `library.md`.
+- **(c) rascunhos espaçados:** `roadmap/issue-extension-isolated-draft.md` (A, **não antes de 08/10**, bug reproduzido:
+  `--extension --isolated` lança Chromium headless sem aviso) e `roadmap/issue-mcp-tests-env-draft.md` (B, **não antes de
+  15/10**, reproduzido com `PLAYWRIGHT_MCP_CAPS=vision`). Correções do revisor aplicadas (o "Allow & select" é outra
+  causa; Steps deve ser refeito num worktree de `upstream/main` no dia). Repro do A em `roadmap/upstream-repro/`.
+- **(d) sync → aplicado.** Ensaio em worktree: 1 conflito previsto (modify/delete de 2 workflows de docker, `git rm`),
+  cherry-pick do #43037 descartado sozinho, 67/67 MCP, tsc da extensão = linha de base de 3, `check_deps` ok. Somado:
+  `check_copilot_models.yml` removido (gatilho `pull_request`, fura a política do patch 1) e `FORK.md` com a rota sem
+  stash. Checkout real movido com `git reset --keep` (edits de `roadmap/` de outra sessão preservados), `npm install`
+  no lugar (lockfile só trocou `electron`/`ip-address`; `npm ci` apagaria o `node_modules` sob servidores MCP vivos),
+  build ok, `.build-stamp` tocado. Validação no checkout real: `check_deps` 0, 66/67 + a 67ª era artefato do `--output`
+  em caminho 8.3 (falha igual no upstream puro; sem `--output`, 3/3) → armadilha registrada no `FORK.md`.
+  Extensão: só `relayConnection.ts` mudou (#43025, fix do upstream); protocolo igual, então a extensão carregada segue
+  funcionando; o fix só vale depois de **recarregar a extensão nos perfis** (ação do Gabriel, recomendada).
+- **drift:** `workflow_dispatch` ok, abriu a issue #2 do fork ("34 atrás, conflito: sim") → fechada após o sync.

@@ -152,6 +152,8 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
 - ⚠️ **Unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` (and `PLAYWRIGHT_MCP_EXTENSION`) before running extension tests.** If the
   shell has the real token exported, the test server sends it to the test browser's extension and the connect page shows
   "Invalid token provided.": `env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN npm run test-extension -- <filter>`.
+- Don't point `--output` at a Windows 8.3 short path (e.g. `C:/Users/GABRIE~1/...`, the session scratchpad):
+  `core.spec.ts` "can navigate to file:// URLs" then fails with `Connection closed`, on upstream too. Default output is fine.
 - Never `taskkill /F /IM chrome.exe`: dozens of PIDs belong to one real window. Kill specific PIDs found by matching the
   command line against the test's `userDataDir`.
 - Server death is clean on Windows without a browser: `watchdog.ts` closes on `process.stdin` `close`.
