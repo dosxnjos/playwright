@@ -139,10 +139,10 @@ back in `~/.claude.json`. Restart Claude Code instances after changing it; it is
 
 Build: `npm ci && npm run build`, then `chrome://extensions` -> Developer mode -> "Load unpacked" ->
 `packages/extension/dist/`. Reload it there after every build, **in each profile that uses the unpacked copy**.
-⚠️ **Profile 13: never click "Reload"; restart Chrome instead (`chrome://restart`).** There the entry is also an
-account (Web Store-synced) extension with a stale 0.2.1 record from 17/07: startup loads `dist` (0.4.0.1), the Reload
-button brings back 0.2.1 (seen 01/10/2026, survives a Chrome restart). Profile 7 reloads fine. The clean fix (remove +
-"Load unpacked") wipes the extension's `localStorage`, i.e. regenerates the `padrao` token: rotate it in the vault.
+⚠️ If "Reload" brings back an old version (startup shows the `dist` one), the profile's entry is also an account
+(Web Store-synced) extension with a stale record (`account_extension_type: 2` in `Secure Preferences`). Cure: remove
+the extension and "Load unpacked" again. That wipes its `localStorage`, so the token changes: rotate it everywhere the
+vault note lists. Hit Profile 13 on 01/10/2026 (stale 0.2.1 from 17/07), cured that way.
 The manifest `key` pins the same extension ID as the Chrome Web Store version: disable the store copy in that profile
 first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need the `chromium` channel.
 
