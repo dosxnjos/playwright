@@ -126,3 +126,5 @@ Preparo: workflow `upstream-preparo-playwright` (8 agentes, executor + revisor c
   Extensão: só `relayConnection.ts` mudou (#43025, fix do upstream); protocolo igual, então a extensão carregada segue
   funcionando; o fix só vale depois de **recarregar a extensão nos perfis** (ação do Gabriel, recomendada).
 - **drift:** `workflow_dispatch` ok, abriu a issue #2 do fork ("34 atrás, conflito: sim") → fechada após o sync.
+
+> Fechado em 2026-10-01: plano executado (sync, #43050, #43051, rascunhos); o acompanhamento segue no card recorrente cce21afc9f588 com a rotina roadmap/ronda-upstream.md.

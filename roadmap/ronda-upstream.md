@@ -44,8 +44,15 @@ Espaçamento: no máximo **1 envio novo** (issue ou PR) por ronda; resposta a ma
 1. Anotar no card (`anotar_card`) uma linha por item: o que mudou desde a última ronda (ou "sem mudança").
 2. Se algum item mudou de estado, atualizar a tabela acima e commitar **só este arquivo** no `main` do fork
    (`git add roadmap/ronda-upstream.md`), push `origin main` (fast-forward).
-3. **Itens 1 a 4 encerrados** (mergeado, fechado ou recusado) → a ronda acabou de vez: `atualizar_card` com
-   `outros={"recorrente": null}`, relatório final (o que entrou no upstream, branches que sobraram no fork para o
-   Gabriel apagar, o que fazer com o item 5) e `[[FEITO]]`. Sem `recorrente`, o card não rearma.
-4. Senão: `[[FEITO]]` (a central rearma para amanhã). Algo que só o Gabriel resolve:
+3. **Item parado também encerra:** issue sem atribuição nem resposta de mantenedor há **30 dias** da abertura, ou
+   PR sem revisão há 30 dias → item encerrado como "sem resposta do upstream" (a issue/PR fica aberta lá; a
+   ronda só deixa de vigiar). O item 5 é só observação e **nunca segura a ronda**.
+4. **Itens 1 a 4 encerrados** → **fechar de vez, sem deixar nada pendurado** (pedido do Gabriel, 01/10):
+   - `atualizar_card` com `outros={"recorrente": null}`, todas as subtarefas `feito`, e relatório final no card
+     (o que entrou no upstream, o que ficou sem resposta, branches que sobraram no fork para o Gabriel apagar);
+   - worktrees `C:\Dev\pw-up-*` removidos; rascunhos já enviados apagados de `roadmap/` (o texto vive no GitHub);
+   - este arquivo ganha como **última linha** `> Fechado em AAAA-MM-DD: <evidência em 1 linha>` (a última linha
+     `>` é a que o guarda de roadmap órfão lê) e vai commitado;
+   - `[[FEITO]]`. Sem `recorrente`, o card fica em `feito` e não volta.
+5. Senão: `[[FEITO]]` (a central rearma para amanhã). Algo que só o Gabriel resolve:
    `[[DECISAO]] <pergunta> | opções: A/B | recomendo: X | dono: gabriel` com a instrução pronta em 1 linha.
