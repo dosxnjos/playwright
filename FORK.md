@@ -91,9 +91,8 @@ Then check: `npm run ctest-mcp -- group-label capabilities tabs core`, plus from
 ⚠️ `npm run flint` does **not** cover `packages/extension/` (its two tsconfigs are not in the root project): a real
 `ReferenceError` in `connect.tsx` once shipped with a clean flint. Baseline on upstream: 3 `@types/chrome` errors in
 `connectedTabGroup.ts` (`TabChangeInfo`, `ungroup` tuple); more than 3 is a regression.
-⚠️ On Windows `npm run flint` also fails in `doc` (`getBrowserVersions`) and `check-deps` (html-reporter/playwright
-type paths); both are environment failures, not regressions. To check DEPS for `playwright-core` alone, run a copy of
-`utils/check_deps.js` with the other `innerCheckDeps` lines removed.
+⚠️ On Windows `npm run flint` also fails in `doc` (`getBrowserVersions` launches firefox and webkit, not installed
+here); environment failure, not a regression.
 
 ## Running the server from this fork (`scripts/run-mcp-server.cjs`)
 
