@@ -165,9 +165,9 @@ Detailed guides for common development tasks:
 
 ---
 
-## This fork (dosxnjos/playwright, branch `fork-v2`)
+## This fork (dosxnjos/playwright, single branch `main`)
 
-Not part of upstream: strip this section before any PR. `fork-v2` is upstream `main` plus a small patch set
+Not part of upstream: strip this section before any PR. `main` is upstream `main` plus a small patch set
 (`browser_set_group_label`, agent tabs closed on disconnect, dark UI, run-from-source wrapper). What it carries,
 how to sync with upstream, how the wrapper and extension work, and the testing gotchas (extension tests need a
 human on Windows; unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` first): **[FORK.md](FORK.md)**.

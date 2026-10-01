@@ -1,6 +1,7 @@
 # dosxnjos/playwright: what this fork carries over upstream
 
-Not part of upstream. `fork-v2` (28/09/2026) is `microsoft/playwright` `main` plus the small patch set below.
+Not part of upstream. `main` is `microsoft/playwright` `main` plus the small patch set below; it is the only branch
+(rebuilt as `fork-v2` on 28/09/2026, folded back into `main` on 01/10/2026).
 The fork was rebuilt on top of upstream instead of merged: the old multi-connection code was replaced by
 upstream's own (PR #42259), so what is left is only what upstream does not do. Plan and decisions:
 `roadmap/2026-09-28-refazer-fork-sobre-upstream.md`. Old branch: tag `fork-pre-refazer-2026-09-28`;
@@ -48,7 +49,7 @@ Everything is in this public repo; nothing secret is. Each machine has **its own
 Chrome profile's extension storage): never copy someone else's.
 
 ```bash
-git clone -b fork-v2 https://github.com/dosxnjos/playwright.git && cd playwright
+git clone https://github.com/dosxnjos/playwright.git && cd playwright
 npm ci && npm run build && touch scripts/.build-stamp     # ~25 s; Node 20+
 ```
 
@@ -75,11 +76,12 @@ enough: install the Chrome Web Store extension and run `npx @playwright/mcp@late
 
 ```bash
 git fetch upstream
-git rebase upstream/main          # on fork-v2
+git rebase upstream/main          # on main
 npm ci && npm run build && touch scripts/.build-stamp
+git push --force-with-lease origin main   # the rebase rewrites main; needs the owner's OK each time
 ```
 
-`.github/workflows/upstream-drift.yml` runs weekly (Mon 12:00 UTC) and only opens/updates one issue when `fork-v2` is
+`.github/workflows/upstream-drift.yml` runs weekly (Mon 12:00 UTC) and only opens/updates one issue when `main` is
 25+ commits behind or a rebase would conflict; it never syncs. Schedules run from the default branch (`main`), and GitHub
 disables them after 60 days without repo activity (re-enable in the Actions tab).
 
@@ -138,7 +140,7 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
 - **`tests/extension/` needs a human on Windows.** The connect flow relies on Chrome's OS-level singleton (relaunching
   the same `chrome.exe`/`--user-data-dir` opens a tab in the existing window); on Windows the tests hang at 30 s and
   ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (**disabled manually in the repo's Actions tab as of 29/09/2026**:
-  enable it there to use it; push to `main` or `fork-v2`
+  enable it there to use it; push to `main`
   with paths under `packages/extension/`, `tests/extension/` or `tools/`; free on a public repo) and a live check. `tests/mcp/` runs fine locally (`npm run ctest-mcp`).
 - ⚠️ **Unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` (and `PLAYWRIGHT_MCP_EXTENSION`) before running extension tests.** If the
   shell has the real token exported, the test server sends it to the test browser's extension and the connect page shows
