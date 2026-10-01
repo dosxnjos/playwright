@@ -490,3 +490,5 @@ spec e por quê. Nada de prosa longa.
   upstream, aprovação do issue pelo time do Playwright.
 
 > Auditado em 2026-09-01 (overhaul): VIVO (em risco) — itens 9–13 estão só no commit 6f0b4cfdc da branch extension-multi-connection; main não tem connect.html?mcpRelayUrl nem isOwnConnectPage e divergiu 5 commits; validação ao vivo nunca feita; md nunca commitado
+
+> Fechado em 2026-10-01: superado. O fork foi refeito sobre o upstream em 28/09 (`fork-v2`): a instrumentação (Fases 1–2) e as correções 9–13 nunca chegaram à `main` e ficaram só na tag `fork-multi-connection-6f0b4cfdc`; o upstream cobre parte (#42259, #41966, #42221). Mitigação vigente: o `CLAUDE.md` global (nunca `tabs new` como 1ª ação). Reavaliar só o que ainda doer: card `c58dd10d6b05f` e `roadmap/2026-09-28-refazer-fork-sobre-upstream.md`.
