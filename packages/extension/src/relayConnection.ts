@@ -84,6 +84,9 @@ export class RelayConnection {
   onsetgrouplabel?: (label: string) => Promise<void>;
   // Fork: the user took the tab over (Cancel on the debugger bar, DevTools opened): not a page to close.
   ontabtakenover?: (tabId: number) => void;
+  // Fork (foco zero): set by background.ts for a connection that must not take the user's tab (token, no
+  // PLAYWRIGHT_MCP_FOCUS=on, or a sub-agent): its popups do not stay in front.
+  silent = false;
 
   get attachedTabs(): ReadonlySet<number> {
     return this._attachedTabs;
@@ -172,7 +175,16 @@ export class RelayConnection {
     if (this._closed || !this._attachedTabs.has(details.sourceTabId))
       return;
     chrome.tabs.get(details.tabId).then(
-        tab => this.attachTab({ ...tab, openerTabId: details.sourceTabId }),
+        tab => {
+          // Fork (foco zero): Chrome creates the popup active and names the tab that was active then as its
+          // openerTabId (measured, see above): put that one back. Not when that tab is the source itself: the user was
+          // looking at the agent's tab (to follow it, to log in) and the popup is what they see next. A popup in a
+          // window of its own (window.open with features) still comes to the front: its opener is already the
+          // active tab of the other window.
+          if (this.silent && tab.active && tab.openerTabId !== undefined && tab.openerTabId !== tab.id && tab.openerTabId !== details.sourceTabId)
+            void chrome.tabs.update(tab.openerTabId, { active: true }).catch(() => {});
+          this.attachTab({ ...tab, openerTabId: details.sourceTabId });
+        },
         () => {}); // Already closed.
   }
 

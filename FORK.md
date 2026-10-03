@@ -14,9 +14,9 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 | 1 | `scripts/run-mcp-server.cjs` wrapper, CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.gitignore`, `.github/workflows/` | ours |
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
-| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
+| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source, `0.4.0.4` since foco zero: `storage` permission) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
 | 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off; an ended agent's backend is released by a SubagentStop marker file | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
-| 7 | silent connect: a relay already connected opens the next connect page from inside Chrome; a sub-agent connects, opens tabs and `select`s in the background; the connect page drops the token from its own URL | `mcp/cdpRelay.ts`, `mcp/extensionContextFactory.ts:38`, `backend/extensionSession.ts` (`relayScope`), `mcp/agentRouter.ts` (`_entryFor`), `tools/index.ts` (exports for the spec), `extension/src/background.ts` (`silent`), `extension/src/ui/connect.tsx` (token), `extension/manifest.json` (`0.4.0.3`, `webNavigation`), `tests/mcp/agent-silent.spec.ts`; since the 03/10 live test also `mcp/browserModel.ts` (`onTabCreated` guard), `mcp/cdpRelayV2.ts` (`ownTabsOnly`, `onInitialized`), `backend/screenshot.ts` (`screenshotTimeout`, `screenshotTimeoutFor`, `pw:mcp:shot`), `extension/src/connectedTabGroup.ts` (agent tabs closed one by one; owner by an attached opener), `extension/src/relayConnection.ts` (popup source), `tests/extension/popup-source.spec.ts`. Live check 03/10: isolation, release and no stolen focus ok; a sub-agent's screenshot timed out 3/3 (30 s timeout since, re-check pending) | ours |
+| 7 | silent connect: a relay already connected opens the next connect page from inside Chrome; a sub-agent connects, opens tabs and `select`s in the background; the connect page drops the token from its own URL | `mcp/cdpRelay.ts`, `mcp/extensionContextFactory.ts:38`, `backend/extensionSession.ts` (`relayScope`), `mcp/agentRouter.ts` (`_entryFor`), `tools/index.ts` (exports for the spec), `extension/src/background.ts` (`silent`), `extension/src/ui/connect.tsx` (token), `extension/manifest.json` (`0.4.0.3`, `webNavigation`), `tests/mcp/agent-silent.spec.ts`; since the 03/10 live test also `mcp/browserModel.ts` (`onTabCreated` guard), `mcp/cdpRelayV2.ts` (`ownTabsOnly`, `onInitialized`), `backend/screenshot.ts` (`screenshotTimeout`, `screenshotTimeoutFor`, `pw:mcp:shot`), `extension/src/connectedTabGroup.ts` (agent tabs closed one by one; owner by an attached opener), `extension/src/relayConnection.ts` (popup source), `tests/extension/popup-source.spec.ts`. Live check 03/10: isolation, release and no stolen focus ok; a sub-agent's screenshot timed out 3/3 (30 s timeout since, re-check pending). **Foco zero** (03/10, roadmap `2026-10-03-melhoria-foco-zero-e-limpeza.md` phase 1): the main agent too, with a token, unless `PLAYWRIGHT_MCP_FOCUS=on`; the first connection puts back the user's tab; silent popups do not stay in front: `mcp/cdpRelay.ts` (`subAgent`, `silent=1`), `extension/src/focusMemory.ts`, `extension/src/background.ts` (`putBack`), `extension/src/relayConnection.ts` (`silent`), `extension/src/ui/connect.tsx` (`silent`), `tests/extension/focus-zero.spec.ts` | ours |
 
 Tab ownership: a tab is **agent-owned** (closed on disconnect) if the agent created it: the token-bypass seed, a
 popup, `browser_tabs new`, `Target.createTarget`. It is **user-owned** (only ungrouped) if the user picked it in the
@@ -87,7 +87,8 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
   - `--isolated`: agents share no cookies or storage (one context each);
   - `tools/list` only lists the main agent's page WebMCP tools (a sub-agent can still call its own page's tool);
   - in extension mode, closing an agent's last tab closes its connection: the next call reconnects (navigate in the
-    last tab instead of closing it); with patch 7 a sub-agent reconnects in the background, the main agent with focus;
+    last tab instead of closing it); with patch 7 a sub-agent reconnects in the background, and since foco zero the
+    main agent too (with a token; with `PLAYWRIGHT_MCP_FOCUS=on`, with focus);
   - a server process killed without dispose leaves its empty session folder behind (harmless, nothing reads it);
   - release markers only cover agents whose SubagentStop fires (normal end of an Agent tool or Workflow agent,
     measured; Esc or crash not measured): the idle timeout stays the safety net.
@@ -105,10 +106,41 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
 - **Another machine:** copy the hook from `C:\Dev\cerebro\harness-espelho\` to `~/.claude/hooks/` and add the
   PreToolUse entry of roadmap 2.2 to `~/.claude/settings.json`; without it the agents of a session share one tab again.
 
-## Silent connect (patch 7)
+## Foco zero: silent connect (patch 7)
 
 Without it every agent's first browser call launches `chrome.exe` with a connect page, and the extension focuses the
-page and its window: one stolen window per sub-agent.
+page and its window: one stolen window per sub-agent. **Foco zero** (03/10/2026, roadmap
+`2026-10-03-melhoria-foco-zero-e-limpeza.md` phase 1, at the Gabriel's request: "pages and tab groups must not take
+the focus by default"): with a token, nothing the agents do takes the user's tab or window, the main agent included.
+
+- **Who is in the background.** A sub-agent always (its connect page only with a token). The main agent when there is a
+  token (`PLAYWRIGHT_MCP_EXTENSION_TOKEN`) and `PLAYWRIGHT_MCP_FOCUS` is not `on`: then it is a background relay too
+  (connect page through a carrier with `active:false`, tabs with `active:false`, `Page.bringToFront` answered locally,
+  focus emulation, 30 s screenshot timeout), but **not** own-tabs-only: a tab dragged into the main agent's group is
+  still handed over. Without a token the main agent stays in front: the connect page needs a click on Allow.
+  `pw:mcp:relay` log: `Relay created, background=… subAgent=…`.
+- **`PLAYWRIGHT_MCP_FOCUS=on`** (server env, then restart Claude Code) gives the main agent today's focus back:
+  connect page and first connection in front, `browser_tabs new` active, `select` brings the tab up, popups in front.
+  Sub-agents stay in the background (that is `PLAYWRIGHT_MCP_AGENT_SILENT=off`).
+- **First connection (extension `0.4.0.4`).** Each session's first relay has no carrier and launches `chrome.exe`, which
+  opens the connect page as the active tab and raises Chrome. A background relay with a token adds `silent=1` to the
+  connect page URL; `ui/connect.tsx` passes it in `connectToTab`, and `background.ts` (`putBack`) skips the focus calls
+  and asks `focusMemory.ts` to put back the tab that was active in that window before the connect page and, if no
+  Chrome window had the focus then, to call `chrome.windows.update(id, {focused:false})`. Only while the connect page
+  is still the active tab (a user who clicked another tab meanwhile keeps it). Asking Chrome at connect time does not
+  work (measured, Chromium 1247 headless: inside `tabs.onCreated` `tabs.query({active})` already returns the new tab;
+  a tab created with `active:false` gets `lastAccessed` = its creation time, so "most recently accessed" picks agent
+  tabs), so `FocusMemory` tracks `tabs.onActivated` and `windows.onFocusChanged` and snapshots both at each
+  `tabs.onCreated` (fired before the tab's `onActivated`); the state lives in `chrome.storage.session` (new `storage`
+  permission, no prompt) because the service worker sleeps between connections and wakes up for the connect page's
+  own `onCreated`. Unknown state (fresh browser session whose first event is the connect page) -> nothing is put back.
+  ⚠️ Unmeasured on Windows: whether `focused:false` hands the focus back to the terminal (roadmap step 2 spike; check
+  with the live test below).
+- **Silent popups.** A connection created silent (`RelayConnection.silent`: a background connect page or `silent=1`)
+  puts back the tab Chrome names as a popup's raw `openerTabId` (the tab that was active, see "Popups" below) when the
+  popup was created active and that tab is not the popup's source: a popup opened from the agent tab the user is
+  looking at (they clicked into it to follow it or to log in) stays in front. Chrome still creates it active, so a
+  put-back popup may flash for a moment.
 
 - **Carrier.** `mcp/cdpRelay.ts` keeps a process-wide set of relays whose extension is connected. A relay that needs
   its connect page asks one of them to `chrome.tabs.create` it (already allow-listed in the extension, no new
@@ -127,7 +159,7 @@ page and its window: one stolen window per sub-agent.
   (`Relay created, background=…` in the log). A background relay opens its connect page with `active:false` (only with
   a token: without one the page stays in front, the user has to click Allow), opens its tabs (`browser_tabs new`) with
   `active:false`, and answers `Page.bringToFront` itself, so `browser_tabs select` of a sub-agent never changes the
-  tab you are looking at. The main agent keeps today's behavior.
+  tab you are looking at. Since foco zero the main agent with a token is a background relay too (see above).
 - **Focus emulation (background relay).** A background tab gets no `requestAnimationFrame`, and the `stable` check of
   click, hover and check polls on it; `--extension` connects with `noDefaults`, which skips focus emulation
   (`server/chromium/crPage.ts`). So right after each `chrome.debugger.attach` (seed, `browser_tabs new`, popups) a
@@ -160,8 +192,9 @@ page and its window: one stolen window per sub-agent.
   admits the popup, and `_onTabAttached` makes it agent-owned (closed when the sub-agent ends). `chrome.tabs.create`
   is not affected: with or without `index` it appends at the end of the strip, no group, no opener (same measurement).
   Needs the `webNavigation` permission (Reload the unpacked extension; Chrome may ask to accept "read your browsing
-  history"); an extension without it keeps upstream's `openerTabId` path. Also seen there and **not fixed**: such a
-  popup is created `active:true`, so a sub-agent's `window.open`/`target=_blank` brings its popup to the front. And a
+  history"); an extension without it keeps upstream's `openerTabId` path. Also seen there: such a popup is created
+  `active:true`, so a sub-agent's `window.open`/`target=_blank` brought its popup to the front; since foco zero a
+  silent connection puts the previous tab back (see "Silent popups" above). And a
   tab created inside a group from a group tab no connection attached (ctrl+click in a user tab the guard ignored) is
   tracked by nobody: neither attached, closed nor ungrouped, it stays in a `Playwright · …` group until the service
   worker restarts. Hypothesis, not checked: a plausible origin of the 03/10 leftover.
@@ -170,21 +203,29 @@ page and its window: one stolen window per sub-agent.
   after `fonts loaded`, i.e. in `Page.getLayoutMetrics`/`Page.captureScreenshot`, not in the font wait; the same capture
   of a background tab passed before patch 7. `backend/screenshot.ts` gives it `max(action timeout, 30 s)`
   (`screenshotTimeoutFor(tab)`: the relay registered for `tab.page.context().browser()`, its `background` getter,
-  then `screenshotTimeout`); the main agent keeps the action timeout. `DEBUG=pw:mcp:shot` logs every capture: `screenshot <target> background=… timeout=… took Nms ok|failed`.
-  Unknown yet: whether 30 s is enough or the capture of a never-shown tab hangs; that is what the next live test measures.
-- **Extension.** `background.ts`: a token connection (no picked tab) whose connect page is not the active tab skips
-  the `tabs.update(active)` + `windows.update(focused)`. An older extension still connects, only with focus.
+  then `screenshotTimeout`); since foco zero that includes the main agent with a token (its tabs are never shown
+  either); with `PLAYWRIGHT_MCP_FOCUS=on` it keeps the action timeout. `DEBUG=pw:mcp:shot` logs every capture: `screenshot <target> background=… timeout=… took Nms ok|failed`.
+  Unknown yet: whether 30 s is enough or the capture of a never-shown tab hangs; that is what the next live test measures,
+  for a sub-agent and, since foco zero, for the main agent with a token on a tab it never showed (before foco zero its
+  first tab was in front and captured at once). If it hangs, `PLAYWRIGHT_MCP_FOCUS=on` gives the main agent its fast
+  foreground capture back.
+- **Extension.** `background.ts`: a token connection (no picked tab) whose connect page is not the active tab, or that
+  carries `silent=1`, skips the `tabs.update(active)` + `windows.update(focused)`. An older extension still connects,
+  only with focus (it ignores `silent=1`); a `0.4.0.4` extension with an older server sees no `silent=1` and focuses
+  the first connection as before.
   `ui/connect.tsx` removes `token` from its own URL (`history.replaceState`) before anything connects: with the
   token the connect page becomes the agent's first tab, and its URL used to come back in tool responses (`Page URL`).
-- **Not covered:** a popup a sub-agent's page opens (`window.open`, `target=_blank`) is created by Chrome, not by the
-  relay, so it comes to the front (seen in Chromium, see "Popups" above). With `--extension --isolated` all agents share one relay, and the agent
+- **Not covered:** a popup in a window of its own (`window.open` with features) still comes to the front (its opener
+  is already the active tab of the other window). With `--extension --isolated` all agents share one relay, and the agent
   that created it decides `background` for everyone (read from the code, untested; not a configuration used here).
   A sub-agent has no way to bring its tab to the front (`browser_tabs select` and `page.bringToFront()` are answered
   locally): focus emulation is what keeps its background tab usable; if a click still times out there, the way out is
-  `PLAYWRIGHT_MCP_AGENT_SILENT=off` and a server restart.
-- **Kill switch:** `PLAYWRIGHT_MCP_AGENT_SILENT=off` (server env) turns off the carrier and the background relay (with
-  it the own-tabs-only guard and the longer screenshot timeout); the extension side then never sees a background
-  connect page, so it focuses as before.
+  `PLAYWRIGHT_MCP_AGENT_SILENT=off` and a server restart. The same holds for the main agent with a token since foco
+  zero: to have it show you a tab, `PLAYWRIGHT_MCP_FOCUS=on`.
+- **Kill switch:** `PLAYWRIGHT_MCP_AGENT_SILENT=off` (server env) turns off the carrier and the background relay of
+  every agent, main included (with it the own-tabs-only guard, the longer screenshot timeout and `silent=1`); the
+  extension side then never sees a background or silent connect page, so it focuses as before.
+  `PLAYWRIGHT_MCP_FOCUS=on` only turns the main agent's part off.
 - **Tests:** `tests/mcp/agent-silent.spec.ts` drives `CDPRelayServer` with a fake extension and a fake CDP client
   (carrier, `active` with and without token, dead carrier skipped, kill switch, background tabs and `bringToFront`,
   focus emulation, carrier page that never connects / answers late / fails, simultaneous first connections, router
@@ -199,6 +240,16 @@ page and its window: one stolen window per sub-agent.
   from an ignored tab and dragged in is only ungrouped. Not covered by a test: a real screenshot with `background=true`
   (headless shows no slow capture) and the extension's one-by-one close. Real Chrome: roadmap 4.0/4.5, by hand after
   the extension "Reload".
+  Foco zero adds to `agent-silent.spec.ts`: the main relay with a token opens its connect page and tabs with
+  `active:false`, answers `bringToFront`, emulates focus and is `background`; with `PLAYWRIGHT_MCP_FOCUS=on`, without a
+  token or with `PLAYWRIGHT_MCP_AGENT_SILENT=off` it does not; `silent=1` only with a background relay and a token; the
+  main relay still attaches a dragged-in tab. `popup-source.spec.ts`: a sub-agent popup leaves the active tab as it
+  was, and so does a main agent popup with a token (its connection is silent only through `silent=1`, background.ts
+  `putBack`); a popup from the agent tab the user is looking at stays in front; with `PLAYWRIGHT_MCP_FOCUS=on` the main
+  agent's popup comes to the front. `tests/extension/focus-zero.spec.ts`
+  (same harness, `npm run test-extension -- focus-zero`): the first connection puts back the user's tab, also after a
+  service worker restart (`Target.closeTarget` on the worker); a user who clicked another tab meanwhile keeps it;
+  `PLAYWRIGHT_MCP_FOCUS=on` leaves the connect page in front. Not covered: the window focus (headless has none).
 
 ## Known limitations
 
@@ -206,9 +257,18 @@ page and its window: one stolen window per sub-agent.
   `Browser` object, so the registry lookup misses.
 - A tab dragged by hand into a sub-agent's tab group is not attached (patch 7, own tabs only): give the main agent the
   tab instead, or set `PLAYWRIGHT_MCP_AGENT_SILENT=off` and restart the server.
-- A sub-agent's screenshot may take up to 30 s before failing (patch 7, screenshot timeout), instead of 5 s.
-- A sub-agent's popup comes to the front (Chrome creates it `active:true`), and with an extension older than `0.4.0.3`
-  (no `webNavigation`) it is never attached to the sub-agent (patch 7, "Popups"): Reload the unpacked extension.
+- A sub-agent's screenshot, and since foco zero the main agent's with a token, may take up to 30 s before failing
+  (patch 7, screenshot timeout), instead of 5 s. Whoever needs the main agent's prints to be fast and sure (until the
+  live test measures the never-shown capture): `PLAYWRIGHT_MCP_FOCUS=on` and restart Claude Code.
+- With an extension older than `0.4.0.3` (no `webNavigation`) a sub-agent's popup is never attached to it (patch 7,
+  "Popups"), and older than `0.4.0.4` it comes to the front and the first connection keeps the connect page in front
+  (foco zero): Reload the unpacked extension. Even on `0.4.0.4` a silent popup may flash before the previous tab comes
+  back, and one in a window of its own stays in front.
+- Foco zero: the main agent with a token can no longer show you a tab (`browser_tabs select` does not bring it up, new
+  tabs open behind): set `PLAYWRIGHT_MCP_FOCUS=on` and restart Claude Code for that. Whether the first connection hands
+  the window focus back to the terminal (`windows.update({focused:false})`) is unmeasured on Windows; the tab the user
+  was on is put back only if the extension saw it become active (state in `chrome.storage.session`, empty in a fresh
+  browser session until the first tab switch).
 - Wrapper (`scripts/run-mcp-server.cjs`), inherited from the old fork: a `.build-lock` left by a killed background build
   is never expired (delete it by hand); `.build-stamp` gets the mtime of the build's end, so an edit made during the
   ~25 s build counts as built; the npx fallback runs with `shell: true` and unquoted args, so an arg containing a space
@@ -316,6 +376,17 @@ last-focused profile and offers the token to the wrong one. New token = add its 
 `--browser chromium --isolated --headless` (`argvForAiSession`), and `PLAYWRIGHT_MCP_EXTENSION` is dropped from their
 env (`envForAiSession`): overnight there is no human to accept the connection and the first tool call used to hang for
 1800 s. Human sessions (`humano:*` or no marker) keep the argv unchanged.
+
+**Each launch prunes the output folder.** Every tool call leaves a `page-<timestamp>.yml` or `console-<timestamp>.log`
+in `<cwd>/.playwright-mcp` and the server never removes them (110 MB in `C:\Dev\unclick` on 03/10/2026). After
+spawning the server, the wrapper (`schedulePrune` / `pruneOutputDir`) deletes from `<cwd>/.playwright-mcp`,
+`PLAYWRIGHT_MCP_OUTPUT_DIR` and `--output-dir` the **first-level files** whose name matches
+`^(page|console|network|trace|video)-\d{4}-\d{2}-\d{2}T[\d-]+Z?(\.\w+)+$` and whose mtime is older than
+`PLAYWRIGHT_MCP_OUTPUT_RETENTION_DAYS` (default 7; `0` turns it off). Never a subfolder (`~/.playwright-mcp/agentes-fim`
+survives), never a chosen name (`meu-print.png`). It is all async after the spawn and a failure only goes to stderr: it
+neither delays the ~30 s startup nor kills the server. One-off run with the same rule:
+`node scripts/prune-mcp-output.cjs [--dry-run] [--days N] <output folder>...`. Test (plain node, exit 0/1):
+`node scripts/run-mcp-server.test.cjs`.
 
 To force pure npx again: put `"command": "npx", "args": ["-y", "@playwright/mcp@<pin>", "--extension", "--browser", "chrome"]`
 back in `~/.claude.json`. Restart Claude Code instances after changing it; it is live config shared by all of them.

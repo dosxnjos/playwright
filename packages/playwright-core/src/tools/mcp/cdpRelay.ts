@@ -58,6 +58,8 @@ const connectedRelays = new Set<CDPRelayServer>();
 // Relays opening their connect page right now, oldest first: a relay with no carrier waits for an older one.
 const connectingRelays = new Set<CDPRelayServer>();
 const silentConnect = () => process.env.PLAYWRIGHT_MCP_AGENT_SILENT !== 'off';
+// Fork (foco zero, 03/10/2026): with a token the main agent works in the background too; this brings its focus back.
+const mainFocus = () => process.env.PLAYWRIGHT_MCP_FOCUS === 'on';
 // From the carrier's chrome.tabs.create to the connect page's WebSocket. Read per call: tests shorten it.
 const carrierTimeout = () => +(process.env.PWTEST_EXTENSION_CARRIER_TIMEOUT ?? 10_000);
 
@@ -85,7 +87,8 @@ export class CDPRelayServer {
   private _token?: string;
   private _handler: ExtensionProtocolV2;
   private _extensionConnectionPromise = new ManualPromise<void>();
-  // Fork-only (patch 7): a sub-agent's relay, whose connect page and tabs open without taking the user's window.
+  // Fork-only (patch 7, foco zero): a relay whose connect page and tabs open without taking the user's window: a
+  // sub-agent's, and the main agent's with a token unless PLAYWRIGHT_MCP_FOCUS=on.
   private _background: boolean;
   // Fork-only (patch 7): resolves once this relay's extension finished its handshake and the relay carries other
   // relays' connect pages; rejects if it stops or loses its extension before that.
@@ -98,13 +101,16 @@ export class CDPRelayServer {
     this._profileDirectory = profileDirectory;
     this._protocolVersion = parseInt(process.env.PWTEST_EXTENSION_PROTOCOL ?? protocol.VERSION.toString(), 10);
     this._token = process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
-    this._background = !!options.background && silentConnect();
-    debugLogger(`Relay created, background=${this._background}`);
+    const subAgent = !!options.background && silentConnect();
+    // Fork (foco zero): the main agent too, when a token connects it without a click (FORK.md § Foco zero). Without a
+    // token its connect page and tabs stay in front: the user has to click Allow there.
+    this._background = subAgent || (silentConnect() && !!this._token && !mainFocus());
+    debugLogger(`Relay created, background=${this._background} subAgent=${subAgent}`);
 
     const sendCommand = (method: string, params: any): Promise<any> => {
       if (!this._extensionConnection)
         throw new Error('Extension not connected');
-      // Fork (patch 7): a sub-agent's new tabs (browser_tabs new) open in the background.
+      // Fork (patch 7, foco zero): a background relay's new tabs (browser_tabs new) open in the background.
       if (this._background && method === 'chrome.tabs.create')
         params = [{ ...params?.[0], active: false }];
       if (this._background && method === 'chrome.debugger.attach')
@@ -112,7 +118,8 @@ export class CDPRelayServer {
       return this._extensionConnection.send(method as keyof ExtensionCommandV2, params);
     };
     // Fork (patch 7): a sub-agent's relay never attaches a tab that merely entered its group (FORK.md § Silent connect).
-    this._handler = new ExtensionProtocolV2(sendCommand, { ownTabsOnly: this._background });
+    // Not the main agent's, even in the background: a tab dragged into its group is still handed over (upstream).
+    this._handler = new ExtensionProtocolV2(sendCommand, { ownTabsOnly: subAgent });
 
     const uuid = crypto.randomUUID();
     this._cdpPath = `/cdp/${uuid}`;
@@ -194,6 +201,10 @@ export class CDPRelayServer {
     url.searchParams.set('protocolVersion', this._protocolVersion.toString());
     if (this._token)
       url.searchParams.set('token', this._token);
+    // Fork (foco zero): the chrome.exe launch opens the connect page in front; this asks the extension to put the tab
+    // the user was on back once connected. Without a token the page has to stay: the user clicks Allow there.
+    if (this._background && this._token)
+      url.searchParams.set('silent', '1');
     const href = url.toString();
     // Fork (patch 7): through a relay already connected in this process when there is one, so no chrome.exe launch.
     if (await this._openConnectPageViaCarrier(href, earlier))
@@ -227,7 +238,7 @@ export class CDPRelayServer {
     });
   }
 
-  // Fork-only (patch 7). A sub-agent's connect page opens in the background, unless there is no token: then the user
+  // Fork-only (patch 7, foco zero). A background relay's connect page opens in the background, unless there is no token: then the user
   // has to see it to click Allow. Returns false to fall back to the chrome.exe launch: no carrier, a carrier that fails
   // or does not answer, or (with a token) a page that does not connect in time, which is closed first. Without that
   // close, a page connecting late would race the launched one and stay open with an error.
@@ -418,7 +429,8 @@ export class CDPRelayServer {
         return { };
       }
       case 'Page.bringToFront': {
-        // Fork (patch 7): a sub-agent never brings its tab over the one the user is looking at (browser_tabs select).
+        // Fork (patch 7, foco zero): a background relay never brings its tab over the one the user is looking at
+        // (browser_tabs select). PLAYWRIGHT_MCP_FOCUS=on gives the main agent its bringToFront back.
         if (this._background)
           return { };
         break;

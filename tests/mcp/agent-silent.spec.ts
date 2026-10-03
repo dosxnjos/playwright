@@ -148,7 +148,7 @@ class FakePlaywright extends EventEmitter {
 const relays: Relay[] = [];
 const fakes: (FakeExtension | FakePlaywright)[] = [];
 const savedEnv = { ...process.env };
-const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'PLAYWRIGHT_MCP_AGENT_SILENT', 'PWTEST_EXTENSION_CARRIER_TIMEOUT'];
+const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'PLAYWRIGHT_MCP_AGENT_SILENT', 'PLAYWRIGHT_MCP_FOCUS', 'PWTEST_EXTENSION_CARRIER_TIMEOUT'];
 // The chrome.exe launches (fallback path), by connect page URL. The relay calls child_process.spawn through the module
 // object, so replacing it here catches the launch without running anything.
 let launches: string[] = [];
@@ -158,6 +158,7 @@ test.beforeEach(() => {
   // Having a token is what lets a connect page in the background connect without a click; any value does here.
   process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = randomUUID();
   delete process.env.PLAYWRIGHT_MCP_AGENT_SILENT;
+  delete process.env.PLAYWRIGHT_MCP_FOCUS;
   delete process.env.PWTEST_EXTENSION_CARRIER_TIMEOUT;
   launches = [];
   (childProcess as any).spawn = (command: string, args: string[]) => {
@@ -222,13 +223,56 @@ test('a sub-agent relay opens its connect page in the background through a conne
   fakes.push(...carrier.extension.spawned);
 });
 
-test('the main agent relay opens its connect page in the foreground through a connected relay', async () => {
+// Fork (foco zero, 03/10/2026): with a token the main agent works in the background too; PLAYWRIGHT_MCP_FOCUS=on brings
+// back the old behavior (connect page, tabs and bringToFront in front). FORK.md § Foco zero.
+test('with a token the main agent relay also opens its connect page in the background through a connected relay', async () => {
+  const carrier = await connectedCarrier();
+  const reconnect = await startRelay(false);
+  await reconnect.establishExtensionConnection('main');
+  expect(createdConnectPage(carrier.extension).active).toBe(false);
+  fakes.push(...carrier.extension.spawned);
+});
+
+test('PLAYWRIGHT_MCP_FOCUS=on: the main agent relay opens its connect page in the foreground; a sub-agent stays in the background', async () => {
+  process.env.PLAYWRIGHT_MCP_FOCUS = 'on';
   const carrier = await connectedCarrier();
   const reconnect = await startRelay(false);
   await reconnect.establishExtensionConnection('main');
   expect(createdConnectPage(carrier.extension).active).toBe(true);
   fakes.push(...carrier.extension.spawned);
+  const sub = await startRelay(true);
+  await sub.establishExtensionConnection('main · gp-1111');
+  const created = carrier.extension.received.filter(c => c.method === 'chrome.tabs.create');
+  expect(created.map(c => c.params[0].active)).toEqual([true, false]);
+  fakes.push(...carrier.extension.spawned);
 });
+
+// The extension only knows a connect page is meant to stay out of the way from this flag: the chrome.exe launch opens
+// it in front, and only the extension can put the previous tab back (extension background.ts, `silent`).
+for (const [name, background, env, expected] of [
+  ['with a token the main agent', false, {}, '1'],
+  ['with a token a sub-agent', true, {}, '1'],
+  ['PLAYWRIGHT_MCP_FOCUS=on: the main agent', false, { PLAYWRIGHT_MCP_FOCUS: 'on' }, null],
+  ['without a token the main agent', false, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: undefined }, null],
+  ['without a token a sub-agent', true, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: undefined }, null],
+  ['PLAYWRIGHT_MCP_AGENT_SILENT=off: the main agent', false, { PLAYWRIGHT_MCP_AGENT_SILENT: 'off' }, null],
+] as const) {
+  test(`${name} asks the extension for a silent connect: silent=${expected}`, async () => {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined)
+        delete process.env[key];
+      else
+        process.env[key] = value;
+    }
+    const relay = await startRelay(background);
+    const established = relay.establishExtensionConnection('main');
+    const extension = await FakeExtension.connect(relay.extensionEndpoint());
+    fakes.push(extension);
+    await established;
+    expect(launches).toHaveLength(1);
+    expect(new URL(launches[0]).searchParams.get('silent')).toBe(expected);
+  });
+}
 
 test('without a token the connect page opens in the foreground: the user has to click Allow', async () => {
   delete process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
@@ -292,7 +336,7 @@ test('a sub-agent relay opens its tabs in the background and never brings them t
   expect(subExtension.methods()).not.toContain('chrome.debugger.sendCommand Page.bringToFront');
 });
 
-test('the main agent relay keeps opening tabs in the foreground and forwards Page.bringToFront', async () => {
+test('with a token the main agent relay opens its tabs in the background and never brings them to front', async () => {
   const relay = await startRelay(false);
   const extension = await FakeExtension.connect(relay.extensionEndpoint());
   fakes.push(extension);
@@ -301,16 +345,44 @@ test('the main agent relay keeps opening tabs in the foreground and forwards Pag
   const attached = new Promise<any>(resolve => playwright.on('event', e => e.method === 'Target.attachedToTarget' && resolve(e.params)));
   await playwright.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await attached;
-  expect(createdConnectPage(extension).active).toBeUndefined();
+  expect(createdConnectPage(extension).active).toBe(false);
 
-  await playwright.send('Page.bringToFront', {}, sessionId);
-  expect(extension.methods()).toContain('chrome.debugger.sendCommand Page.bringToFront');
+  expect(await playwright.send('Page.bringToFront', {}, sessionId)).toEqual(expect.objectContaining({ result: {} }));
+  expect(extension.methods()).not.toContain('chrome.debugger.sendCommand Page.bringToFront');
 });
+
+for (const [name, env] of [
+  ['PLAYWRIGHT_MCP_FOCUS=on', { PLAYWRIGHT_MCP_FOCUS: 'on' }],
+  ['without a token', { PLAYWRIGHT_MCP_EXTENSION_TOKEN: undefined }],
+  ['PLAYWRIGHT_MCP_AGENT_SILENT=off', { PLAYWRIGHT_MCP_AGENT_SILENT: 'off' }],
+] as const) {
+  test(`${name}: the main agent relay opens tabs in the foreground and forwards Page.bringToFront`, async () => {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined)
+        delete process.env[key];
+      else
+        process.env[key] = value;
+    }
+    const relay = await startRelay(false);
+    const extension = await FakeExtension.connect(relay.extensionEndpoint());
+    fakes.push(extension);
+    const playwright = await FakePlaywright.connect(relay.cdpEndpoint());
+    fakes.push(playwright);
+    const attached = new Promise<any>(resolve => playwright.on('event', e => e.method === 'Target.attachedToTarget' && resolve(e.params)));
+    await playwright.send('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await attached;
+    expect(createdConnectPage(extension).active).toBeUndefined();
+
+    await playwright.send('Page.bringToFront', {}, sessionId);
+    expect(extension.methods()).toContain('chrome.debugger.sendCommand Page.bringToFront');
+    expect(extension.methods()).not.toContain('chrome.debugger.sendCommand Emulation.setFocusEmulationEnabled');
+  });
+}
 
 // A background tab gets no requestAnimationFrame, and the 'stable' check of click/hover/check polls on it. With
 // --extension Playwright connects with noDefaults and skips focus emulation (crPage.ts), so the background relay turns
 // it on per tab, right after the attach and before Playwright sees the target.
-test('a sub-agent relay turns focus emulation on for every tab it attaches; the main one does not', async () => {
+test('a sub-agent relay, and with a token the main one, turn focus emulation on for every tab they attach', async () => {
   const carrier = await connectedCarrier();
   const sub = await startRelay(true);
   await sub.establishExtensionConnection('main · gp-1111');
@@ -329,7 +401,8 @@ test('a sub-agent relay turns focus emulation on for every tab it attaches; the 
   fakes.push(mainPlaywright);
   await mainPlaywright.send('Target.createTarget', { url: 'about:blank' });
   expect(carrier.extension.methods()).toContain('chrome.debugger.attach');
-  expect(carrier.extension.methods()).not.toContain('chrome.debugger.sendCommand Emulation.setFocusEmulationEnabled');
+  // Without a token or with PLAYWRIGHT_MCP_FOCUS=on it does not: see the foreground tests above.
+  expect(carrier.extension.methods()).toContain('chrome.debugger.sendCommand Emulation.setFocusEmulationEnabled');
 });
 
 test('a connect page opened by a carrier that never connects is closed and chrome.exe takes over', async () => {
@@ -498,12 +571,21 @@ for (const [name, background, silent] of [['the main agent relay', false, undefi
 
 // Fork (patch 7, defect 2 of the 03/10 live test): a screenshot of a sub-agent's never-shown background tab took 4-5 s
 // and failed at the 5 s action timeout; the main agent keeps the configured one.
-test('a background relay says so; PLAYWRIGHT_MCP_AGENT_SILENT=off turns it off', async () => {
+test('a background relay says so: a sub-agent always, the main agent with a token unless PLAYWRIGHT_MCP_FOCUS=on; PLAYWRIGHT_MCP_AGENT_SILENT=off turns all off', async () => {
+  expect((await startRelay(true)).background).toBe(true);
+  expect((await startRelay(false)).background).toBe(true);
+  expect((await startRelay()).background).toBe(true);
+  process.env.PLAYWRIGHT_MCP_FOCUS = 'on';
   expect((await startRelay(true)).background).toBe(true);
   expect((await startRelay(false)).background).toBe(false);
-  expect((await startRelay()).background).toBe(false);
+  delete process.env.PLAYWRIGHT_MCP_FOCUS;
+  delete process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+  expect((await startRelay(true)).background).toBe(true);
+  expect((await startRelay(false)).background).toBe(false);
+  process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = randomUUID();
   process.env.PLAYWRIGHT_MCP_AGENT_SILENT = 'off';
   expect((await startRelay(true)).background).toBe(false);
+  expect((await startRelay(false)).background).toBe(false);
 });
 
 test('screenshot timeout: at least 30 s for a background tab, the action timeout otherwise', () => {

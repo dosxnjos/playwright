@@ -34,7 +34,7 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 type Relay = InstanceType<typeof tools.CDPRelayServer>;
 
 const realSpawn = childProcess.spawn;
-const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN'];
+const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'PLAYWRIGHT_MCP_FOCUS'];
 const savedEnv = { ...process.env };
 const relays: Relay[] = [];
 const browsers: Browser[] = [];
@@ -45,6 +45,7 @@ let launches: string[] = [];
 test.beforeEach(() => {
   // The extension of this throwaway profile is given the same random value below.
   process.env[ENV[0]] = randomUUID();
+  delete process.env.PLAYWRIGHT_MCP_FOCUS;
   launches = [];
   // Only the relay's launch (its executablePath is node, see startRelay): this process also launches Chromium.
   (childProcess as any).spawn = (command: string, args: string[], options: any) => {
@@ -131,7 +132,12 @@ test('a popup of a sub-agent background tab goes to the sub-agent, not to the ag
   const { mainAgent, subAgent } = await mainAndSubAgent(browserContext);
   await mainAgent.page.goto(server.EMPTY_PAGE);
   await subAgent.page.goto(server.PREFIX + '/opener');
-  // The main agent's tab is the one in front; the sub-agent's never is.
+  // The main agent's tab is the one in front (since foco zero only after the user clicks it); the sub-agent's never is.
+  await swEval(browserContext, async (url: string) => {
+    const chrome = (globalThis as any).chrome;
+    const [tab] = await chrome.tabs.query({ url });
+    await chrome.tabs.update(tab.id, { active: true });
+  }, server.EMPTY_PAGE);
   const activeUrl = await swEval(browserContext, async () => (await (globalThis as any).chrome.tabs.query({ active: true }))[0].url, undefined);
   expect(activeUrl).toBe(server.EMPTY_PAGE);
 
@@ -144,6 +150,103 @@ test('a popup of a sub-agent background tab goes to the sub-agent, not to the ag
   // The main agent never got it (openerTabId named its tab).
   await new Promise(f => setTimeout(f, 500));
   expect(mainAgent.context.pages()).toHaveLength(1);
+});
+
+// Fork (foco zero, 03/10/2026): Chrome creates such a popup active; a silent connection (token, no
+// PLAYWRIGHT_MCP_FOCUS=on) puts back the tab that was in front, which Chrome names as the popup's openerTabId.
+test('a popup of a sub-agent background tab does not stay in front: the active tab stays the same', async ({ pathToExtension, server }, testInfo) => {
+  server.setContent('/opener', '<a id=link href="/popup-target" target=_blank>open</a>', 'text/html');
+  server.setContent('/popup-target', '<title>popup</title>', 'text/html');
+  const browserContext = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { subAgent } = await mainAndSubAgent(browserContext);
+  await subAgent.page.goto(server.PREFIX + '/opener');
+  const activeTab = () => swEval(browserContext, async () => {
+    const [tab] = await (globalThis as any).chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return { id: tab.id as number, url: tab.url as string };
+  }, undefined);
+  const before = await activeTab();
+  expect(before.url).not.toBe(server.PREFIX + '/opener');
+
+  const [popup] = await Promise.all([
+    subAgent.context.waitForEvent('page', { timeout: 10_000 }),
+    subAgent.page.click('#link'),
+  ]);
+  await popup.waitForURL(server.PREFIX + '/popup-target');
+  await expect.poll(async () => (await activeTab()).id).toBe(before.id);
+});
+
+// Fork (foco zero): the main agent with a token (no PLAYWRIGHT_MCP_FOCUS) is silent too. Its connection only gets
+// `silent` from the connect page's `silent=1` (background.ts `putBack`): its connect page came from the chrome.exe
+// launch, in front, not through a carrier.
+test('with a token a popup of the main agent background tab does not stay in front', async ({ pathToExtension, server }, testInfo) => {
+  server.setContent('/opener', '<a id=link href="/popup-target" target=_blank>open</a>', 'text/html');
+  server.setContent('/popup-target', '<title>popup</title>', 'text/html');
+  server.setContent('/user', '<title>user</title>', 'text/html');
+  const browserContext = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { mainAgent } = await mainAndSubAgent(browserContext);
+  await mainAgent.page.goto(server.PREFIX + '/opener');
+  // The user's own tab, in front.
+  const userTabId = await swEval(browserContext, async (url: string) => {
+    const tab = await (globalThis as any).chrome.tabs.create({ url, active: true });
+    await new Promise(f => setTimeout(f, 300));
+    return tab.id as number;
+  }, server.PREFIX + '/user');
+  const activeTabId = () => swEval(browserContext, async () => (await (globalThis as any).chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].id as number, undefined);
+  expect(await activeTabId()).toBe(userTabId);
+
+  const [popup] = await Promise.all([
+    mainAgent.context.waitForEvent('page', { timeout: 10_000 }),
+    mainAgent.page.click('#link'),
+  ]);
+  await popup.waitForURL(server.PREFIX + '/popup-target');
+  await expect.poll(activeTabId).toBe(userTabId);
+  // Not only for a moment.
+  await new Promise(f => setTimeout(f, 500));
+  expect(await activeTabId()).toBe(userTabId);
+});
+
+// Fork (foco zero): a popup opened from the tab the user is looking at (they clicked into the agent's tab to follow it
+// or to log in) is what they asked to see: Chrome names that same tab as its openerTabId, and nothing is put back.
+test('with a token a popup of the agent tab the user is looking at stays in front', async ({ pathToExtension, server }, testInfo) => {
+  server.setContent('/opener', '<a id=link href="/popup-target" target=_blank>open</a>', 'text/html');
+  server.setContent('/popup-target', '<title>popup</title>', 'text/html');
+  const browserContext = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { mainAgent } = await mainAndSubAgent(browserContext);
+  await mainAgent.page.goto(server.PREFIX + '/opener');
+  // The user clicks the agent's tab.
+  await swEval(browserContext, async (url: string) => {
+    const chrome = (globalThis as any).chrome;
+    const [tab] = await chrome.tabs.query({ url });
+    await chrome.tabs.update(tab.id, { active: true });
+  }, server.PREFIX + '/opener');
+  const activeUrl = () => swEval(browserContext, async () => (await (globalThis as any).chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].url as string, undefined);
+  expect(await activeUrl()).toBe(server.PREFIX + '/opener');
+
+  const [popup] = await Promise.all([
+    mainAgent.context.waitForEvent('page', { timeout: 10_000 }),
+    mainAgent.page.click('#link'),
+  ]);
+  await popup.waitForURL(server.PREFIX + '/popup-target');
+  // Chrome creates it active: a put-back would undo that a moment later, so wait before looking.
+  await new Promise(f => setTimeout(f, 500));
+  expect(await activeUrl()).toBe(server.PREFIX + '/popup-target');
+});
+
+test('PLAYWRIGHT_MCP_FOCUS=on: a popup of the main agent comes to the front, as before', async ({ pathToExtension, server }, testInfo) => {
+  process.env.PLAYWRIGHT_MCP_FOCUS = 'on';
+  server.setContent('/opener', '<a id=link href="/popup-target" target=_blank>open</a>', 'text/html');
+  server.setContent('/popup-target', '<title>popup</title>', 'text/html');
+  const browserContext = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { mainAgent } = await mainAndSubAgent(browserContext);
+  await mainAgent.page.goto(server.PREFIX + '/opener');
+  const [popup] = await Promise.all([
+    mainAgent.context.waitForEvent('page', { timeout: 10_000 }),
+    mainAgent.page.click('#link'),
+  ]);
+  await popup.waitForURL(server.PREFIX + '/popup-target');
+  await new Promise(f => setTimeout(f, 500));
+  const activeUrl = await swEval(browserContext, async () => (await (globalThis as any).chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0].url, undefined);
+  expect(activeUrl).toBe(server.PREFIX + '/popup-target');
 });
 
 test('a popup of the main agent foreground tab still goes to the main agent', async ({ pathToExtension, server }, testInfo) => {

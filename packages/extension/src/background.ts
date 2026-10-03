@@ -17,6 +17,7 @@
 import { debugLog } from './relayConnection';
 import { PendingConnections } from './pendingConnection';
 import { ConnectedTabGroup, cleanupStalePlaywrightGroups, isNonDebuggableUrl, ungroupTabs, uniqueGroupStyle } from './connectedTabGroup';
+import { FocusMemory } from './focusMemory';
 
 import type { TabOwner } from './connectedTabGroup';
 
@@ -31,6 +32,8 @@ type PageMessage = {
   // selection happens.
   tab?: chrome.tabs.Tab;
   clientName?: string;
+  // Fork (foco zero): `silent=1` in the connect page URL (cdpRelay.ts, a token and no PLAYWRIGHT_MCP_FOCUS=on).
+  silent?: boolean;
 } | {
   type: 'getConnectionStatus';
 } | {
@@ -47,6 +50,8 @@ class PlaywrightExtension {
   // Service worker restarts lose all connection state, so any existing
   // Playwright groups are stale. Connections wait on this before reconciling.
   private _cleanupPromise: Promise<void>;
+  // Fork (foco zero): which tab was in front before a connect page, to put it back after a silent connect.
+  private _focusMemory = new FocusMemory();
 
   constructor() {
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
@@ -82,8 +87,12 @@ class PlaywrightExtension {
         const seedOwner: TabOwner = message.tab && message.tab.id !== sender.tab!.id ? 'user' : 'agent';
         // Fork (patch 7): a connect page opened in the background (a sub-agent's, through an already connected
         // relay) with the token and no picked tab connects without taking the user's tab or window.
-        const silent = !message.tab && sender.tab?.active === false;
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner, silent).then(
+        // Fork (foco zero): the main agent's too, with a token: its connect page came from a chrome.exe launch, in front,
+        // and `silent=1` asks to put back the tab that was there (FocusMemory; nothing to do if the page is not in front).
+        // Never with a picked tab (no token).
+        const putBack = !message.tab && message.silent === true;
+        const silent = !message.tab && (sender.tab?.active === false || putBack);
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner, silent, putBack).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
@@ -108,7 +117,7 @@ class PlaywrightExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner, silent = false): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner, silent = false, putBack = false): Promise<void> {
     try {
       await this._cleanupPromise;
       this._releaseTab(selectorTabId);
@@ -122,6 +131,8 @@ class PlaywrightExtension {
       const id = ++this._lastConnectionId;
       const taken = [...this._connections.values()].map(group => group.groupStyle);
       const group = new ConnectedTabGroup(connection, tab, clientName, uniqueGroupStyle(clientName, taken), tabId => this._pendingConnections.has(tabId), seedOwner);
+      // Fork (foco zero): a silent connection's popups do not stay in front (relayConnection.ts _onPopupCreated).
+      connection.silent = silent;
       group.onclose = () => this._connections.delete(id);
       group.onlabelrequest = label => {
         const others = [...this._connections].filter(([otherId]) => otherId !== id).map(([, other]) => other.groupStyle);
@@ -135,6 +146,8 @@ class PlaywrightExtension {
           chrome.windows.update(tab.windowId, { focused: true }),
         ]).catch(() => {});
       }
+      if (putBack)
+        await this._focusMemory.putBack(tab.id);
 
       if (tab.id !== selectorTabId)
         await chrome.tabs.remove(selectorTabId).catch(() => {});

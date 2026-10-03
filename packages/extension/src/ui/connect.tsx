@@ -143,6 +143,8 @@ const ConnectApp: React.FC = () => {
         type: 'connectToTab',
         tab,
         clientName: clientInfo,
+        // Fork (foco zero): the relay asks to leave the user's tab and window as they were (token connections only).
+        silent: new URLSearchParams(window.location.search).get('silent') === '1',
       });
 
       if (response?.success) {
