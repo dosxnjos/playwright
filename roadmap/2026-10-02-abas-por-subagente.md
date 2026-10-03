@@ -82,6 +82,10 @@ fork: o upstream recusou (`#39703`, pavelfeldman: "Give it two browsers").
 
 ## Decisões técnicas
 
+> Continuado em 03/10/2026 por [2026-10-03-melhoria-abas-por-agente.md](2026-10-03-melhoria-abas-por-agente.md):
+> o Gabriel pediu isolamento de verdade; os níveis 1 e 2 abaixo foram superados (servidor inline medido e descartado;
+> carimbo por hook + roteador no processo). O nível 0 vale até a Fase 2 de lá fechar.
+
 - **Nível 0 agora, sem código** (quem: opus 5.5 com advisor; confiança alta; reverte apagando a regra): numa sessão
   humana, **um único dono do browser por vez**; subagente que não é o dono recebe URL/conteúdo pronto e não chama
   `mcp__playwright__*`; subagente nunca chama `browser_close` nem `browser_set_group_label`. Registrado em
