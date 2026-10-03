@@ -876,10 +876,10 @@ fazemos esse teste."* Autoriza rodar as Fases 0 e 1 numa invocação, com as tra
 
 Marcar `[x]` ao fechar cada passo (o detalhe e a prova de cada um estão na § 4).
 
-- Fase 0: [ ] 0.1 (com o Gabriel) · [x] 0.2 · [x] 0.3 · [x] 0.4 (+ Workflow) · [x] 0.5
-- Fase 1: [x] 1.1 · [x] 1.2 · [x] 1.3 · [x] 1.4 · [x] 1.5 (10 casos) · [x] 1.6 · [ ] 1.7 (com o Gabriel) ·
-  [ ] 1.8 (só o item do wrapper feito; merge espera 0.1 e 1.7) · [x] 1.9 (no ramo)
-- Fase 2: [ ] 2.1 · [ ] 2.2 · [ ] 2.3 · [ ] 2.4 · [ ] 2.5
+- Fase 0: [x] 0.1 · [x] 0.2 · [x] 0.3 · [x] 0.4 (+ Workflow) · [x] 0.5
+- Fase 1: [x] 1.1 · [x] 1.2 · [x] 1.3 · [x] 1.4 · [x] 1.5 (10 casos) · [x] 1.6 · [x] 1.7 · [x] 1.8 · [x] 1.9
+- Fase 2: [x] 2.1 · [x] 2.2 · [x] 2.3 · [x] 2.4 · [x] 2.5
+- **4.7 (novo, achado na 2.3):** [ ] token fora da URL da página de conexão (ver § Relatório Fase 2)
 - Fase 3: [ ] 3.1 · [ ] 3.2 · [ ] 3.3 · [ ] 3.4
 - Fase 4: [ ] 4.0 · [ ] 4.1 · [ ] 4.2 · [ ] 4.3 · [ ] 4.4 · [ ] 4.5 · [ ] 4.6
 - Fase 5: só sob demanda.
@@ -971,3 +971,49 @@ Arquivos (ramo): `mcp/agentRouter.ts` (novo), `mcp/program.ts`, `backend/common.
 
 Nenhuma decisão em aberto (as três foram respondidas). Esperam o Gabriel no Chrome, nesta ordem (~15 min):
 0.1 → 1.7 → 1.8 (rebase + ff + build + stamp) → Fase 2 (2.1 a 2.3, o portão ao vivo).
+
+## Relatório de execução — Fases 0.1, 1.7, 1.8 e 2 (03/10/2026, sessão 9f526eb4)
+
+Assistida, com o Gabriel no Chrome (perfil `Profile 13`). Maestro desligado e nada em voo no playwright
+(`maestro_estado` às 01:53), então sem pausa. Sem token no ambiente desta sessão (não se lê o `~/.claude.json`):
+nos testes 0.1 e 1.7 o Gabriel autorizou cada conexão à mão, escolhendo uma aba "Welcome" (a semente).
+
+- **0.1 verde.** `node temp/spike-n-relays.mjs` → `A: …example.com/#A | B: …example.org/#B2 | C: …example.net/#C2`,
+  `screenshot de A em 2º plano: ok`, `close B isError: false`, `depois do close de B -> A: …#A | C: …#C2`.
+  N relays num processo funcionam (P1) e o screenshot em 2º plano funciona (P10): vale a decisão 3 (mesma janela).
+- **1.7 verde.** `DEBUG=pw:mcp:router node temp/spike-router-stdio.mjs <worktree>/…/mcp.js` → três `create key=…`
+  (`main`, `…1111` com `spike-router · gp-1111`, `…2222`), `main: …#main | 1111: …#a…1111-2 | 2222: …#a…2222-2`,
+  `rotulo 2222 isError: false`, `drop key=a…1111 dispose=true`, `close 1111 isError: false`,
+  `depois -> main: …#main | 2222: …#a…2222-2`. 2ª rodada com `PAUSA_S=40`: o Gabriel viu os grupos `router`,
+  `router · gp-1111` e `router · gp-2222` separados.
+- **1.8 verde.** `git -C <worktree> rebase main` + `git merge --ff-only wt/agente-router` → `4c6581dda`;
+  `npm run build && touch scripts/.build-stamp`; `find packages/playwright-core/src -newer scripts/.build-stamp` vazio.
+- **2.1 verde.** `~/.claude/hooks/playwright-agente.cjs` = cópia de `temp/playwright-agente.cjs`; as 3 provas da 2.1
+  idênticas ao esperado.
+- **2.2 verde.** Entrada no topo de `hooks.PreToolUse` (com `"shell": "bash"`, como os hooks vizinhos); o `node -e`
+  da prova imprime a entrada. **Prova de disparo** antes da 2.3: `claude -p` com o settings real e um eco chamado
+  `playwright` (`temp/spike-22/`) recebeu `_meta.agente: "main"` da mãe e `"a3276d3ff4daf195f"` do subagente.
+- **2.3 verde** (sessão humana nova, roteiro colado pelo Gabriel). wfA e wfB em paralelo viram só as próprias 2 abas;
+  `tabs list` da mãe mostrou só `example.com/#mae`; o `browser_close` do subagente do passo 4 fechou só a aba dele e
+  a mãe seguiu em `#mae` sem reconectar; o subagente do passo 5 rotulou `rotulo-sub`. No Chrome o Gabriel viu
+  `teste-mae`, dois `teste-mae · wf-…`, um grupo que sumiu (passo 4) e um renomeado para `rotulo-sub`.
+- **2.4 verde.** `cerebro/temas/playwright-mcp.md`: § "Subagentes dividem…" virou "Cada agente tem o próprio grupo"
+  (regra do dono único saiu); hub e o md de 02/10 atualizados; FORK.md ganhou o passo de outra máquina.
+- **2.5 verde.** `git diff upstream/main -- …/backend/tabs.ts …/backend/navigate.ts` → 0 linhas; o `browser_close`
+  ganhou "Other agents keep theirs"; linha do patch 5 saiu da tabela do FORK.md;
+  `ctest-mcp -- agent-routing capabilities tabs core` → `74 passed`. Commit `f27df3224`, no principal com build e stamp.
+
+**Achado de segurança (sessão da 2.3):** a resposta da 1ª ferramenta trazia a URL da página de conexão com
+`token=…`. Causa: o relay põe o token na URL (`mcp/cdpRelay.ts:159-160`, upstream) e, enquanto a semente está nela,
+toda resposta mostra `Page URL`; a regra da casa (1ª ação = `browser_set_group_label`) cai exatamente aí. Medido:
+39 transcripts locais com a URL e o token; 0 em cérebro, central e playwright versionados. Registrado em
+`cerebro/temas/playwright-mcp.md`. Cura vira o passo **4.7**:
+- `packages/extension/src/ui/connect.tsx` (onde lê `params.get('token')`, ~`:97`): logo depois de ler, apagar o
+  `token` da própria URL com `history.replaceState`, antes de conectar; a conexão só nasce depois, então nenhuma
+  resposta de ferramenta vê o token. Vai junto com a 4.4 (um só "Reload" da extensão).
+- **Prova:** depois do Reload, `browser_set_group_label` numa sessão nova e conferir que a `Page URL` da resposta não
+  tem `token=`; **reprova se** tiver.
+- Rotacionar o token: decisão do Gabriel (credencial). Recomendação: não é preciso, a exposição é local, a mesma do
+  `~/.claude.json`.
+
+Commits do fork: `4c6581dda` (patch 6, rebase do `f22f40c74`), `f27df3224` (2.5), este md. Sem push.
