@@ -879,9 +879,12 @@ Marcar `[x]` ao fechar cada passo (o detalhe e a prova de cada um estão na § 4
 - Fase 0: [x] 0.1 · [x] 0.2 · [x] 0.3 · [x] 0.4 (+ Workflow) · [x] 0.5
 - Fase 1: [x] 1.1 · [x] 1.2 · [x] 1.3 · [x] 1.4 · [x] 1.5 (10 casos) · [x] 1.6 · [x] 1.7 · [x] 1.8 · [x] 1.9
 - Fase 2: [x] 2.1 · [x] 2.2 · [x] 2.3 · [x] 2.4 · [x] 2.5
-- **4.7 (novo, achado na 2.3):** [ ] token fora da URL da página de conexão (ver § Relatório Fase 2)
-- Fase 3: [ ] 3.1 · [ ] 3.2 · [ ] 3.3 · [ ] 3.4
-- Fase 4: [ ] 4.0 · [ ] 4.1 · [ ] 4.2 · [ ] 4.3 · [ ] 4.4 · [ ] 4.5 · [ ] 4.6
+- **4.7 (novo, achado na 2.3):** [x] token fora da URL da página de conexão
+- Fase 3: [x] 3.1 · [x] 3.2 · [x] 3.3 · [x] 3.4
+- Fase 4: [x] 4.0 (coberto pelo teste ao vivo) · [x] 4.1 · [x] 4.2 · [x] 4.3 · [x] 4.4 · [x] 4.5 · [x] 4.6
+- **4.8 (novo, proposto):** [ ] popup aberto pela página de um subagente (`window.open`) ainda vem para a frente
+  (o Chrome cria com `active:true`); cura possível: a extensão devolve o foco à aba anterior quando o popup é de
+  conexão silenciosa. Só se incomodar no uso.
 - Fase 5: só sob demanda.
 
 ## Crítica do advisor
@@ -1017,3 +1020,36 @@ toda resposta mostra `Page URL`; a regra da casa (1ª ação = `browser_set_grou
   `~/.claude.json`.
 
 Commits do fork: `4c6581dda` (patch 6, rebase do `f22f40c74`), `f27df3224` (2.5), este md. Sem push.
+
+## Relatório de execução — Fases 3, 4 e correções (03/10/2026, sessão 9f526eb4)
+
+Implementação por workflows no worktree `wt/agente-router` (executor + revisores de contexto zero + corretor), provas
+reconferidas nesta sessão, merge `--ff-only` na `main` com build e stamp. Testes ao vivo com o Gabriel no Chrome.
+
+- **Fase 3 verde.** Roteador lê `_meta.sessao` e varre as marcas do `SubagentStop` (a cada 5 s e no início de cada
+  chamada); chave desconhecida só apaga a marca; `main` nunca é largada; agente que chama de novo depois da própria
+  marca mantém o browser (achado da revisão). `ctest-mcp -- agent-routing` → `14 passed`; 5 mutantes mortos.
+  **3.3:** entrada `SubagentStop` no `~/.claude/settings.json` (hook `playwright-agente.cjs fim`).
+- **Fase 4 + 4.7 verde.** Portador (relay já conectado abre a página de conexão do próximo subagente em 2º plano,
+  fallback para o spawn em 10 s), abas de subagente em 2º plano com foco emulado, `Page.bringToFront` local,
+  extensão pula o foco na conexão silenciosa, página de conexão apaga o token da própria URL. Kill switch
+  `PLAYWRIGHT_MCP_AGENT_SILENT=off`. `tests/mcp/agent-silent.spec.ts`. Commit `9b6147924` (rebase de `f22f40c74`…).
+- **1º teste ao vivo (11:16-11:18):** isolamento ok e token fora da URL, mas (a) uma aba sobrada do teste 1.7
+  (`#a…2222-2`) entrou na conexão de um subagente novo e (b) o print em aba de subagente estourou 5 s.
+- **2º teste ao vivo, Chrome limpo e em câmera lenta (11:28-11:43):** isolamento, fim de subagente (grupos somem)
+  e sem roubo de foco ok; nenhuma aba de fora; print falhou 3/3.
+- **Correções (`87119884a`):** relay de subagente só anexa aba própria ou popup de aba própria
+  (`browserModel.ts`, `ownTabsOnly`); a extensão entrega o popup à conexão dona da aba de origem
+  (`webNavigation.onCreatedNavigationTarget`: o `openerTabId` do Chrome segue a aba ativa, e a mãe sequestrava o
+  popup do subagente; manifest **0.4.0.3**, permissão `webNavigation`); abas do agente fecham uma a uma no
+  disconnect; aba aberta de aba ignorada é do usuário; print em relay de 2º plano com `max(action, 30 s)` e log
+  `pw:mcp:shot`. Primeiro teste de extensão que roda no Windows sem humano: `npm run test-extension -- popup-source`
+  → `4 passed`. `ctest-mcp -- agent-routing agent-silent screenshot tabs capabilities` → `67 passed`.
+- **3º teste ao vivo (13:14-13:24), extensão 0.4.0.3:** 6/6 etapas sem erro, sem aba de fora, sem token, sem sobra.
+  Print: mãe 2,4 s; wfA 14,6 s (uma vez); wfB e wfC juntos ~4 s cada. O popup do wfA nasceu dentro do grupo dele e
+  não vazou para a mãe, mas veio para a frente (vira o 4.8).
+- **Causa da sobra do teste 1.7 não fechada:** a aba de `browser_tabs new` devia ter fechado quando o spike morreu.
+  Endurecido (fechamento aba a aba), sem prova da causa; com a guarda, uma sobra não entra mais em subagente.
+
+Pendências: 4.8 (popup rouba o foco, proposto); `C:\Dev\.playwright-mcp\` acumula snapshots e PNGs de toda sessão
+(1257 arquivos): limpeza periódica ou `--output-dir` em temp, fora deste roadmap.
