@@ -415,7 +415,8 @@ Casos:
 7. `env: { PLAYWRIGHT_MCP_AGENT_IDLE_MS: '500' }`: depois de 1,5 s parado, `a1` volta limpo e a mãe não;
 8. depois do caso 2 (`disconnected` de uma chave), a mãe responde e `a3` cria normalmente.
 
-- **Prova:** `npm run ctest-mcp -- agent-routing` imprime `8 passed`.
+- **Prova:** `npm run ctest-mcp -- agent-routing` imprime `10 passed` (a revisão da Fase 1 somou os casos 9 e 10:
+  nada expira em voo; `browser_close` larga a chave com backend falso).
 - **Reprova se:** qualquer caso falha.
 
 **1.6 Não regressão.**
@@ -474,7 +475,11 @@ process.exit(0);
      nasce **sem** roteador: em `--isolated` cada agente seria um chromium novo, o maestro roda várias sessões em
      paralelo e lá não há incidente. Liga depois de medir processos/memória numa rodada (§ Decisões técnicas).
      **Prova:** `grep -c "PLAYWRIGHT_MCP_AGENT_ROUTING" scripts/run-mcp-server.cjs` → `1`.
-2. No checkout principal, com o maestro pausado se a ronda estiver em voo: `git -C C:/Dev/playwright merge --ff-only agente-router`.
+2. No checkout principal, com o maestro pausado se a ronda estiver em voo. O ramo real é `wt/agente-router`
+   (worktree `C:\Dev\playwright\.claude\worktrees\agente-router`, commit `f22f40c74`), e a `main` andou depois
+   dele (commits de docs), então rebase antes do ff:
+   `git -C C:/Dev/playwright/.claude/worktrees/agente-router rebase main` e depois
+   `git -C C:/Dev/playwright merge --ff-only wt/agente-router`.
 3. Depois: `npm run build && touch scripts/.build-stamp`.
 
 - **Prova:** em `C:/Dev/playwright`, `find packages/playwright-core/src -newer scripts/.build-stamp | head -1` sai vazio.
@@ -602,6 +607,8 @@ Convenção de caminho conferida em 03/10: todos os hooks atuais usam `"$HOME/.c
   - `pc/backend/tabs.ts:27` → `'List, create, close, or select a browser tab.'`;
   - `pc/backend/tabs.ts:30` → `'Tab index, used for close/select. If omitted for close, current tab is closed.'`;
   - `pc/backend/navigate.ts:26` → `'Navigate to a URL'`.
+- `pc/backend/common.ts:27` (`browser_close`) ganha de volta a frase que a revisão da Fase 1 tirou, porque só vale
+  com o carimbo ligado: `'… your tab group). Other agents keep theirs; the next browser call reconnects.'`
 - Commit `chore(mcp): drop the shared-current-tab warning, agents are routed now (fork)`; levar como na 1.8.
 - `FORK.md`: sai a linha do patch 5 da tabela (a linha de `browser_set_group_label` no `capabilities.spec.ts` fica,
   é do patch 2).
@@ -744,11 +751,11 @@ private _sweep() {
 | --- | --- | --- | --- |
 | P1 | N relays num processo conectam no Chrome real, um grupo cada | [código] `pc/mcp/cdpRelay.ts:95-121` (uuid e porta por instância), `:249-253` (só recusa a 2ª extensão do mesmo relay); `ext/background.ts:119-127` (Map sem teto); `ext/ui/connect.tsx:96-100` (token conecta sem clique) | portão 0.1; refeito na 1.7 |
 | P2 | carimbo vale em sessão interativa | [medido] só em `-p` | portão 2.3; se falhar, tudo é `main` (hoje) |
-| P3 | `updatedInput` sem `permissionDecision` vale fora do bypass | [medido] só em bypass; a doc não diz | 0.5 opcional; a casa roda bypass |
-| P4 | npx 0.0.83 descarta `_meta` extra | [inferido]; no fork, [medido] | 0.2 é precondição da 2.2 |
-| P5 | custo do hook por chamada é tolerável | não medido (só os 15–43 ms do log do hook ao servidor) | 0.3 |
-| P6 | hook e servidor chegam à mesma pasta de marcas | `session_id` igual [medido]; caminho [inferido] | 0.4 e testes 9–11 |
-| P7 | SubagentStop dispara em Esc ou crash | a doc diz só "when a subagent finishes" | ociosidade de 30 min (Fase 1); 0.4 mede o caso Workflow |
+| P3 | `updatedInput` sem `permissionDecision` vale fora do bypass | [medido 03/10] em bypass e em `default` (0.5); o `updatedInput` é aplicado antes da checagem de permissão e não a concede | — |
+| P4 | npx 0.0.83 descarta `_meta` extra | [medido 03/10] (0.2): descarta chave desconhecida em silêncio e recusa enum inválido | — |
+| P5 | custo do hook por chamada é tolerável | [medido 03/10] (0.3): mediana ~100 ms via `bash -c`, ~60 ms com node direto; p90 150–300 ms com a máquina carregada | plano B: `"command":"node"` + `args` |
+| P6 | hook e servidor chegam à mesma pasta de marcas | [medido 03/10] (0.4) | — |
+| P7 | SubagentStop dispara em Esc ou crash | fim normal [medido 03/10] para Agent tool **e Workflow** (`workflow-subagent`); Esc/crash não medidos (ver #92716) | ociosidade de 30 min (Fase 1) |
 | P8 | `agent_id` estável na retomada e o mais interno em aninhamento | não testado | chave nova = grupo novo; o velho sai por ociosidade |
 | P9 | `disconnected` vem depois do `browser_close` no modo extensão | [inferido] | o roteador larga a chave pelo nome da tool |
 | P10 | screenshot de aba em 2º plano funciona com a extensão | não medido; o modo extensão pula focus emulation (`crPage.ts:600-605`) | 0.1 mede; decide 4.3 e a 3ª decisão da § 8 |
@@ -786,9 +793,14 @@ private _sweep() {
   - Mitigação: Fase 4, e registrar em FORK.md "navegue na última aba em vez de fechá-la".
 - **R2. `unhandledRejection` cruzado.** Cada Context registra `process.on` (`pc/backend/context.ts:141`), então a rejeição de um agente aparece na próxima resposta de todos. Já acontece no modo HTTP; aceito e documentado.
 - **R3. Mudança no Claude Code** (`agent_id`, `updatedInput`). Falha aberta para `main`. Se o Claude Code passar a validar o schema, as chamadas de browser falham até apagar a entrada da 2.2 (plano B: `io:'input'`, P13).
-- **R4. Latência por chamada** (boot do node no hook). Medida na 0.3.
+- **R4. Latência por chamada** (boot do node no hook). Medida na 0.3: ~100 ms na mediana, cauda de até ~1 s com a máquina ocupada.
 - **R5. Ociosidade** fecha as abas de um agente que passa mais de 30 min sem usar o browser. É configurável e nunca dispara com chamada em voo.
-- **R6. Sessões de IA (`--isolated`).** Cada agente tem contexto próprio, sem cookies em comum entre eles.
+- **R6. Sessões de IA (`--isolated`).** Cada agente teria um **contexto** próprio no browser compartilhado (não um
+  chromium novo: `useSharedBrowser` em `program.ts`, conferido na Fase 1), sem cookies em comum entre eles. Hoje o
+  roteador nasce desligado lá (`ROUTING=off`). O timer de ociosidade do browser compartilhado é um só: quando
+  dispara, todas as chaves caem limpas.
+- **R13. `agent_id` ocasionalmente inconsistente no PreToolUse** (anthropics/claude-code#90662): uma chamada de um
+  subagente vivo pode chegar com outro id e abrir um grupo órfão. Limpa pela ociosidade e pela Fase 3.
 - **R7. WebMCP.** `tools/list` só mostra as tools da aba da mãe. O agente ainda chama a tool da própria aba, porque o lookup vai ao backend dele (`browserBackend.ts:110-117`).
 - **R8. Rebase.** `program.ts:189` (34 commits upstream desde 04/2026, mas é uma linha) e `common.ts:27`; na Fase 4, também `cdpRelay.ts`, `extensionContextFactory.ts` e `ext/background.ts`. É patch só do fork, para sempre.
 - **R9. Muitos agentes com browser.** As cores repetem a partir do 9º grupo (`ext/connectedTabGroup.ts:44-54`) e o Chrome pesa. Sem teto, só aviso.
@@ -814,7 +826,7 @@ Quem: opus 5.5 com advisor (fable), sessão `9f526eb4`, 03/10/2026.
 | identidade por `updatedInput` em `_meta` | alta [medido] | o Claude Code validar o schema → `io:'input'`; o hook perder o `agent_id` → rota toolUseId→transcript |
 | liberação por arquivo-marca, hook síncrono | média-alta | a 0.4 falhar → só ociosidade |
 | ociosidade de 30 min, nunca `main` (subiu de 15 pela crítica do advisor: Workflow com effort alto pensa muito) | média | agente perdendo abas enquanto pensa → `PLAYWRIGHT_MCP_AGENT_IDLE_MS` |
-| sessões de IA (`ia:*`, `--isolated`) nascem **sem** roteador (`ROUTING=off` em `envForAiSession`, 1.8) | média | medir processos/memória numa rodada do maestro com subagentes navegando; se aguentar e houver disputa lá, tirar o `off` |
+| sessões de IA (`ia:*`, `--isolated`) nascem **sem** roteador (`ROUTING=off` em `envForAiSession`, 1.8) | média; motivo mais fraco depois da Fase 1 (é um contexto por agente, não um chromium) | medir contextos/conexões numa rodada do maestro com subagentes navegando; se houver disputa lá, tirar o `off` |
 | textos do patch 5 só saem depois do portão 2.3 (2.5), não na Fase 1 | alta | — |
 | textos do patch 5 de volta ao upstream; `browser_close` com texto do fork | alta | — |
 | sem teto de agentes, aviso a partir de 8 | média | Chrome pesando com muitos grupos → teto por env |
@@ -838,21 +850,35 @@ Quem: opus 5.5 com advisor (fable), sessão `9f526eb4`, 03/10/2026.
 - **completei:** o roteador também funciona nas sessões abertas por IA (chromium headless isolado), mas nasce
   desligado lá (`ROUTING=off`, 1.8) até medir o custo de um chromium por agente; ligar é tirar uma linha.
 - **completei:** rio abaixo, a regra "um dono do browser por vez" sai do cérebro, o FORK.md ganha contrato e passo de instalação, e o roadmap de pesquisa passa a apontar para este.
-- **proposta (não feita):** pedir à Anthropic que repasse `claudecode/agentId` a servidores MCP do usuário, com opt-in.
+- **proposta (feita em 03/10/2026, autorizada pelo Gabriel):** pedir à Anthropic que repasse o id do agente a
+  servidores MCP do usuário, com opt-in: [anthropics/claude-code#99135](https://github.com/anthropics/claude-code/issues/99135)
+  (conta `dosxnjos`; sem duplicata, relacionadas #84638 e #90662).
   - A maquinaria já existe no `claude.exe`, restrita a um servidor interno [código, confiança média].
   - Com ela, o hook de carimbo some.
   - Custa uma issue na conta do Gabriel (dono: gabriel).
 ## Pendente (decisão do Gabriel)
 
-As três decisões da § 8 (foco até a Fase 4, fechar o grupo no fim do subagente, onde nascem as abas). Sessão
-assistida: perguntadas no chat em 03/10/2026; a resposta entra aqui com data.
+Respondidas no chat em 03/10/2026 (sessão `9f526eb4`), as três da § 8:
+1. foco até a Fase 4: **A, ligar já** (o recomendado);
+2. grupo do subagente fecha quando ele termina: **sim** (A);
+3. onde nascem as abas na Fase 4: **mesma janela, em 2º plano** (A), condicionado ao screenshot da 0.1.
+
+## Execução em lote (03/10/2026)
+
+Pedido do Gabriel, 03/10/2026: *"pode fazer até onde não depende de mim, porque vou dormir agora. mas aí amanhã
+fazemos esse teste."* Autoriza rodar as Fases 0 e 1 numa invocação, com as travas:
+- um commit por fase (no ramo do worktree), nunca um commit no fim;
+- **paradas obrigatórias:** 0.1 e 1.7 (Chrome real, com o Gabriel olhando) não rodam sem ele; a 1.8 (levar ao
+  checkout principal) e tudo da Fase 2 em diante esperam a 0.1 e a 1.7 verdes;
+- nada em `~/.claude/settings.json` nem no checkout principal do fork nesta rodada; push nenhum.
 
 ## Tasklist de execução
 
 Marcar `[x]` ao fechar cada passo (o detalhe e a prova de cada um estão na § 4).
 
-- Fase 0: [ ] 0.1 · [ ] 0.2 · [ ] 0.3 · [ ] 0.4 (+ Workflow) · [ ] 0.5 (opcional)
-- Fase 1: [ ] 1.1 · [ ] 1.2 · [ ] 1.3 · [ ] 1.4 · [ ] 1.5 · [ ] 1.6 · [ ] 1.7 · [ ] 1.8 · [ ] 1.9
+- Fase 0: [ ] 0.1 (com o Gabriel) · [x] 0.2 · [x] 0.3 · [x] 0.4 (+ Workflow) · [x] 0.5
+- Fase 1: [x] 1.1 · [x] 1.2 · [x] 1.3 · [x] 1.4 · [x] 1.5 (10 casos) · [x] 1.6 · [ ] 1.7 (com o Gabriel) ·
+  [ ] 1.8 (só o item do wrapper feito; merge espera 0.1 e 1.7) · [x] 1.9 (no ramo)
 - Fase 2: [ ] 2.1 · [ ] 2.2 · [ ] 2.3 · [ ] 2.4 · [ ] 2.5
 - Fase 3: [ ] 3.1 · [ ] 3.2 · [ ] 3.3 · [ ] 3.4
 - Fase 4: [ ] 4.0 · [ ] 4.1 · [ ] 4.2 · [ ] 4.3 · [ ] 4.4 · [ ] 4.5 · [ ] 4.6
@@ -873,3 +899,75 @@ Consultado: fable 5.1 (advisor), com o md já gravado (`87a32df63`), 03/10/2026.
 | dois mds no mesmo alvo sem link | aplicado: o de 02/10 aponta para este |
 | passos sem `[ ]` | aplicado: § Tasklist de execução |
 | cabeçalho de decisões fora do padrão do índice | aplicado: `## Decisões técnicas` |
+
+## Relatório de execução — Fase 0 (03/10/2026, sessão 9f526eb4)
+
+Rota: workflow `roteador-abas-fase0-fase1` (um agente por spike, em paralelo com a Fase 1). Frescor: ok (0 dia,
+0 commit no fork desde a `Base`). Sem Chrome real, sem `~/.claude`, sem checkout principal fora de `temp/`.
+Artefatos em `C:\Dev\playwright\temp\` (fora do git): `spike-npx-meta.mjs`, `playwright-agente.cjs`, `spike-fim/`, `spike-05/`.
+
+- **0.1** não rodou: parada obrigatória (Chrome real com o Gabriel).
+- **0.2 verde.** `node temp/spike-npx-meta.mjs` → `sem _meta: ok` / `com _meta: ok`. Controle: `{action:"bogus"}` →
+  `Invalid arguments … expected one of list|new|close|select` (validação ativa); `_meta` em string e chave de topo → ok.
+  O 0.0.83 foi baixado para o cache do npx agora.
+- **0.3 verde.** Provas da 2.1 contra `temp/playwright-agente.cjs`: as 3 saídas idênticas ao esperado (o `"falso"`
+  foi sobrescrito por `main`; `lixo` → exit 0 sem saída). Loop literal: medianas 239 (fria) / 122 / 119 ms.
+  Decomposição (61 rodadas, p50/p90/máx): `bash -c`+hook 97/297/985; node direto 57/154/497; só boot do node 49/116/330.
+- **0.4 verde, inclusive Workflow.** Agent tool: `ls rel/$SID` → `a78d037d566b013f4`. Sem pasta prévia (`SID2`): nada
+  escrito. Workflow (`SID3`): `ls rel/$SID3` → `a332452d7b4976b04`, `agent_type: workflow-subagent`, mesmo `session_id`.
+  A Fase 3 cobre os dois; a ociosidade fica como rede.
+- **0.5 verde.** `--permission-mode default --allowedTools mcp__eco__eco`: o eco recebeu `_meta.agente` da mãe
+  (`main`) e do subagente (`af25d22461c2c1bed`). Controle sem allowlist: chamada negada, e o input negado já vinha
+  carimbado (o `updatedInput` roda antes da permissão e não a concede). Armadilha do comando: `--allowedTools` é
+  variádica e engole o prompt posicional que vem depois dela; passar o prompt antes da flag ou por stdin.
+
+completei: controle negativo na 0.2 e na 0.5 (para o "ok" não vir de validação desligada); decomposição da latência.
+Commits: só docs (este md). Pendências: 0.1 com o Gabriel.
+
+## Relatório de execução — Fase 1 (03/10/2026, sessão 9f526eb4)
+
+Código no worktree `C:\Dev\playwright\.claude\worktrees\agente-router`, ramo **`wt/agente-router`**, commit
+`f22f40c74` (sem trailer; sem push). Este md fica na `main` do fork, como o resto da sessão: a trava "nada no
+checkout principal" era de código e de build. Frescor: ok (0 commit em `packages/` desde a `Base`).
+
+- **1.1 verde.** `npm ci` (626 pacotes, 22 s) + `npm run build`; `ctest-mcp -- capabilities tabs core` → `64 passed`.
+  Linha de base do conjunto da 1.6: `http.spec.ts:515` já falhava antes de qualquer mudança (modo persistente).
+- **1.2 verde.** `agentRouter.ts` criado; âncoras conferidas no código de hoje. Prova de tipo: `npm run tsc` exit 0
+  (o build é esbuild e não checa tipo). Os 2 `as any` do esqueleto barraram no eslint e viraram tipo preciso.
+- **1.3 verde.** `git diff --stat upstream/main -- …/mcp/program.ts` → `1 file changed, 2 insertions(+), 1 deletion(-)`.
+- **1.4 verde, com desvio.** `grep -c "Close your browser connection" …/common.ts` → `1`. O texto saiu **sem** "Other
+  agents keep theirs": é falso enquanto o roteador está inerte (sem carimbo, `ia:*`, persistente). Decisão técnica:
+  a frase volta na 2.5; confiança alta; reverte reescrevendo uma string.
+- **1.5 verde.** TDD: com o roteador escrito e desligado → `4 failed, 4 passed` (casos 1, 2, 7, 8 vermelhos, como
+  esperado). Ligado → `8 passed`; `--repeat-each=4` → `32 passed`. A revisão somou o caso 9 (nada expira em voo),
+  endureceu o 7 (prova o `dispose` pela contagem de contextos: 2 → 1) e somou o 10 (backend falso: `browser_close`
+  larga a chave; close com erro mantém). Mutantes: tirar `!entry.inFlight &&` e o drop por nome → casos 9 e 10
+  vermelhos; ocioso sem `dispose` → caso 7 vermelho (`recebeu 2, esperado 1`). Final: `10 passed`;
+  `--repeat-each=5` → `50 passed`. Para o caso 10 alcançar o roteador, `tools/index.ts` exporta `withAgentRouting`.
+- **1.6 verde.** `ctest-mcp -- agent-routing capabilities tabs core group-label http idle-timeout roots` →
+  `107 passed, 1 skipped`. `npm run flint` exit 0, inclusive `doc` (contradiz FORK.md:103; uma rodada não reescreve a
+  armadilha). Suíte MCP inteira: `792 passed, 20 skipped, 1 failed` (`config.spec.ts:88`, firefox ausente, modo
+  persistente). Observado uma vez, sem linha de base: `http.spec.ts:330` (persistente, onde o roteador devolve a
+  fábrica intacta) falhou numa rodada e passou sozinho e na seguinte.
+- **1.7 não rodou** (parada obrigatória). **1.8:** só o item do wrapper. `grep -c PLAYWRIGHT_MCP_AGENT_ROUTING
+  scripts/run-mcp-server.cjs` → `1`; `envForAiSession(…,'ia:maestro')` → `off`; `humano:x` e sem marca → indefinido.
+  Merge no principal espera 0.1 e 1.7; o passo 1.8 foi corrigido (ramo `wt/…` e rebase antes do ff).
+- **1.9 verde** no ramo: linha do patch 6 (inclui `tools/index.ts`), seção "Agent routing (patch 6)", "Likely
+  conflicts" com `program.ts:189`, `common.ts:27` e `tools/index.ts`. A linha do patch 5 fica até a 2.5.
+
+Desvios do md (categoria dominante: mecanismo): ramo `wt/agente-router`, não `agente-router`; `--isolated`
+compartilha um browser (um contexto por agente, não um chromium: R6 e a decisão de `ia:*` corrigidas); esqueleto com
+`as any`; "build sem erro de tipo" não provava tipo; o caso 8 original não testava `disconnected` de verdade (agora
+fecha o contexto com `browser_run_code_unsafe`).
+Revisão adversarial: 3 revisores de contexto zero, 5 achados médios (1 duplicado), 4 aplicados acima, nenhum recusado
+no mérito. advisor (fable 5.1): nada bloqueia; `Risco: dado` coberto até onde `--isolated` alcança, e o que fecha
+aba do Gabriel só a 1.7 prova. Pediu conferir o listener de `unhandledRejection` (`context.ts:145` o remove no
+`dispose`: não acumula) e corrigir a 1.8 (feito).
+completei: casos 9 e 10, contagem de contextos no 7, log `drop key=…`, suíte MCP inteira, prova do wrapper nos 3 casos.
+Arquivos (ramo): `mcp/agentRouter.ts` (novo), `mcp/program.ts`, `backend/common.ts`, `tools/index.ts`,
+`scripts/run-mcp-server.cjs`, `tests/mcp/agent-routing.spec.ts` (novo), `FORK.md`.
+
+## Pendências e decisões pendentes (execução 03/10/2026)
+
+Nenhuma decisão em aberto (as três foram respondidas). Esperam o Gabriel no Chrome, nesta ordem (~15 min):
+0.1 → 1.7 → 1.8 (rebase + ff + build + stamp) → Fase 2 (2.1 a 2.3, o portão ao vivo).
