@@ -37,11 +37,18 @@ const TAB = { id: 7, index: 0, windowId: 1, active: false, pinned: false, url: '
 // never connect (a background page that does not run), answer only after `lateMs` (a slow service worker), or fail.
 type CreateMode = 'connect' | 'stall' | 'late' | 'fail';
 
+function methodName(c: Command) {
+  return c.method === 'chrome.debugger.sendCommand' ? `${c.method} ${c.params[1]}` : c.method;
+}
+
 // Stands for the extension's RelayConnection: answers allow-listed chrome.* commands, records them, and, like the
 // connect page the real extension would load, connects a new fake to the relay named in a created connect page URL.
 class FakeExtension {
   readonly received: Command[] = [];
   readonly spawned: FakeExtension[] = [];
+  // Overrides, by methods() name (`chrome.debugger.sendCommand Page.captureScreenshot`, `extension.revealForCapture`):
+  // what the extension answers, after an optional wait. Unlisted methods get the defaults below.
+  readonly answers = new Map<string, (params: any[]) => Promise<{ result?: any, error?: string }>>();
   private _ws: WebSocket;
   private _mode: CreateMode;
   private _lateMs: number;
@@ -81,7 +88,7 @@ class FakeExtension {
   }
 
   methods() {
-    return this.received.map(c => c.method === 'chrome.debugger.sendCommand' ? `${c.method} ${c.params[1]}` : c.method);
+    return this.received.map(methodName);
   }
 
   close() {
@@ -92,6 +99,12 @@ class FakeExtension {
     if (message.id === undefined || !message.method)
       return;
     this.received.push(message);
+    const answer = this.answers.get(methodName(message));
+    if (answer) {
+      const { result, error } = await answer(message.params);
+      this._ws.send(JSON.stringify(error === undefined ? { id: message.id, result: result ?? {} } : { id: message.id, error }));
+      return;
+    }
     let result: any = {};
     if (message.method === 'chrome.tabs.create') {
       const relayUrl = new URL(message.params[0].url ?? 'about:blank').searchParams.get('mcpRelayUrl');
@@ -148,7 +161,7 @@ class FakePlaywright extends EventEmitter {
 const relays: Relay[] = [];
 const fakes: (FakeExtension | FakePlaywright)[] = [];
 const savedEnv = { ...process.env };
-const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'PLAYWRIGHT_MCP_AGENT_SILENT', 'PLAYWRIGHT_MCP_FOCUS', 'PWTEST_EXTENSION_CARRIER_TIMEOUT'];
+const ENV = ['PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'PLAYWRIGHT_MCP_AGENT_SILENT', 'PLAYWRIGHT_MCP_FOCUS', 'PWTEST_EXTENSION_CARRIER_TIMEOUT', 'PWTEST_EXTENSION_REVEAL_HOLD_MS'];
 // The chrome.exe launches (fallback path), by connect page URL. The relay calls child_process.spawn through the module
 // object, so replacing it here catches the launch without running anything.
 let launches: string[] = [];
@@ -588,9 +601,148 @@ test('a background relay says so: a sub-agent always, the main agent with a toke
   expect((await startRelay(false)).background).toBe(false);
 });
 
-test('screenshot timeout: at least 30 s for a background tab, the action timeout otherwise', () => {
-  expect(tools.screenshotTimeout({ timeouts: { action: 5000 } }, true)).toBe(30_000);
-  expect(tools.screenshotTimeout({ timeouts: { action: 40_000 } }, true)).toBe(40_000);
+// Fork (03/10 live test, extension 0.4.0.4, decided by the Gabriel: "mostrar só sem plateia"): Chrome draws no frame for
+// a hidden tab, so Page.captureScreenshot of a background relay's tab waited ~12-31 s. The relay now asks the extension
+// to show the tab for the capture (extension.revealForCapture: only when its window is not the focused one, the
+// extension decides) and to put the user's tab back right after (extension.restoreAfterCapture), even when the capture
+// fails. The extension side is tests/extension/capture-reveal.spec.ts. FORK.md § Foco zero, "Screenshot".
+const REVEAL = 'extension.revealForCapture';
+const RESTORE = 'extension.restoreAfterCapture';
+const CAPTURE = 'chrome.debugger.sendCommand Page.captureScreenshot';
+const PNG = { data: 'iVBORw0KGgo=' };
+
+async function capturingRelay(background: boolean, timeline: string[] = [], name = '') {
+  const relay = await startRelay(background);
+  const established = relay.establishExtensionConnection('main');
+  const extension = await FakeExtension.connect(relay.extensionEndpoint());
+  fakes.push(extension);
+  await established;
+  const playwright = await FakePlaywright.connect(relay.cdpEndpoint());
+  fakes.push(playwright);
+  const attached = new Promise<any>(resolve => playwright.on('event', e => e.method === 'Target.attachedToTarget' && resolve(e.params)));
+  await playwright.send('Target.createTarget', { url: 'about:blank' });
+  const { sessionId } = await attached;
+  // What the extension does by default here: a window nobody looks at (revealed), a capture that works.
+  const answer = (method: string, reply: (params: any[]) => Promise<{ result?: any, error?: string }>) => extension.answers.set(method, async params => {
+    timeline.push(`${name}${method}`);
+    return await reply(params);
+  });
+  answer(REVEAL, async () => ({ result: { revealed: true } }));
+  answer(CAPTURE, async () => ({ result: PNG }));
+  answer(RESTORE, async () => ({ result: { restored: true } }));
+  const capture = () => playwright.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+  const calls = () => extension.received.filter(c => [REVEAL, RESTORE, CAPTURE].includes(methodName(c))).map(c => [methodName(c), ...(methodName(c) === CAPTURE ? [] : c.params)]);
+  return { relay, extension, playwright, sessionId, capture, calls, answer };
+}
+
+for (const [name, background] of [['a sub-agent relay', true], ['with a token the main agent relay', false]] as const) {
+  test(`${name} shows its tab for the capture and puts the user's tab back`, async () => {
+    const { capture, calls, playwright, sessionId } = await capturingRelay(background);
+    // Only the capture: nothing else waits for a frame.
+    await playwright.send('Page.getLayoutMetrics', {}, sessionId);
+    expect(calls()).toEqual([]);
+    expect((await capture()).result).toEqual(PNG);
+    expect(calls()).toEqual([[REVEAL, 7], [CAPTURE], [RESTORE, 7]]);
+  });
+}
+
+test('a window someone looks at: the extension does not reveal, the capture goes on slowly and nothing is put back', async () => {
+  const { capture, calls, answer } = await capturingRelay(true);
+  answer(REVEAL, async () => ({ result: { revealed: false } }));
+  expect((await capture()).result).toEqual(PNG);
+  expect(calls()).toEqual([[REVEAL, 7], [CAPTURE]]);
+});
+
+test('a capture that fails still puts the user\'s tab back, and its error reaches Playwright', async () => {
+  const { capture, calls, answer } = await capturingRelay(true);
+  answer(CAPTURE, async () => ({ error: 'Unable to capture screenshot' }));
+  expect((await capture()).error?.message).toContain('Unable to capture screenshot');
+  expect(calls()).toEqual([[REVEAL, 7], [CAPTURE], [RESTORE, 7]]);
+});
+
+test('an extension older than 0.4.0.5 (no reveal command): the capture goes on as before, without an error', async () => {
+  const { capture, calls, answer } = await capturingRelay(true);
+  answer(REVEAL, async () => ({ error: `Unknown method: ${REVEAL}` }));
+  expect((await capture()).result).toEqual(PNG);
+  expect(calls()).toEqual([[REVEAL, 7], [CAPTURE]]);
+});
+
+test('a restore that fails does not hide the capture', async () => {
+  const { capture, calls, answer } = await capturingRelay(true);
+  answer(RESTORE, async () => ({ error: 'No tab with id: 3' }));
+  expect((await capture()).result).toEqual(PNG);
+  expect(calls()).toEqual([[REVEAL, 7], [CAPTURE], [RESTORE, 7]]);
+});
+
+for (const [name, env] of [
+  ['PLAYWRIGHT_MCP_FOCUS=on', { PLAYWRIGHT_MCP_FOCUS: 'on' }],
+  ['without a token', { PLAYWRIGHT_MCP_EXTENSION_TOKEN: undefined }],
+  ['PLAYWRIGHT_MCP_AGENT_SILENT=off', { PLAYWRIGHT_MCP_AGENT_SILENT: 'off' }],
+] as const) {
+  test(`${name}: the main agent relay captures its tab as upstream, no reveal`, async () => {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined)
+        delete process.env[key];
+      else
+        process.env[key] = value;
+    }
+    const { capture, calls } = await capturingRelay(false);
+    expect((await capture()).result).toEqual(PNG);
+    expect(calls()).toEqual([[CAPTURE]]);
+  });
+}
+
+// Two agents of one session capturing in the same window at once: revealing B would hide A again (its capture waits on)
+// and, depending on which ends first, the restore could leave an agent tab in front instead of the user's.
+test('captures of two background relays at the same time: one reveal at a time', async () => {
+  const timeline: string[] = [];
+  const a = await capturingRelay(true, timeline, 'A ');
+  const b = await capturingRelay(true, timeline, 'B ');
+  a.answer(CAPTURE, async () => {
+    await new Promise(f => setTimeout(f, 300));
+    return { result: PNG };
+  });
+  const first = a.capture();
+  await expect.poll(() => timeline).toContain(`A ${CAPTURE}`);
+  const second = b.capture();
+  expect((await first).result).toEqual(PNG);
+  expect((await second).result).toEqual(PNG);
+  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `A ${RESTORE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
+});
+
+test('a window someone looks at does not hold the other captures back', async () => {
+  const timeline: string[] = [];
+  const a = await capturingRelay(true, timeline, 'A ');
+  const b = await capturingRelay(true, timeline, 'B ');
+  a.answer(REVEAL, async () => ({ result: { revealed: false } }));
+  let slowCapture!: () => void;
+  a.answer(CAPTURE, () => new Promise(f => slowCapture = () => f({ result: PNG })));
+  const first = a.capture();
+  await expect.poll(() => timeline).toContain(`A ${CAPTURE}`);
+  expect((await b.capture()).result).toEqual(PNG);
+  slowCapture();
+  expect((await first).result).toEqual(PNG);
+  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
+});
+
+test('a revealed capture that never answers holds the next reveal back only for a while', async () => {
+  process.env.PWTEST_EXTENSION_REVEAL_HOLD_MS = '300';
+  const timeline: string[] = [];
+  const a = await capturingRelay(true, timeline, 'A ');
+  const b = await capturingRelay(true, timeline, 'B ');
+  a.answer(CAPTURE, () => new Promise(() => {}));
+  void a.capture();
+  await expect.poll(() => timeline).toContain(`A ${CAPTURE}`);
+  expect((await b.capture()).result).toEqual(PNG);
+  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
+});
+
+// Fork (03/10 live test, extension 0.4.0.4): a hidden tab's capture took ~12 s (sub-agent) and 28-31 s (main), at the
+// old 30 s ceiling. The relay now shows the tab for the capture when nobody looks at its window; when someone does, it
+// captures slowly, so the ceiling is 60 s (decided by the Gabriel, 03/10).
+test('screenshot timeout: at least 60 s for a background tab, the action timeout otherwise', () => {
+  expect(tools.screenshotTimeout({ timeouts: { action: 5000 } }, true)).toBe(60_000);
+  expect(tools.screenshotTimeout({ timeouts: { action: 90_000 } }, true)).toBe(90_000);
   expect(tools.screenshotTimeout({ timeouts: { action: 5000 } }, false)).toBe(5000);
   expect(tools.screenshotTimeout({}, false)).toBeUndefined();
 });
@@ -602,7 +754,7 @@ test('screenshot timeout of a tab: from the relay registered for its browser', (
   const mainBrowser = {};
   tools.registerExtensionRelay(subAgentBrowser, { background: true, setGroupLabel: async () => {} });
   tools.registerExtensionRelay(mainBrowser, { background: false, setGroupLabel: async () => {} });
-  expect(tools.screenshotTimeoutFor(tabOn(subAgentBrowser) as any)).toEqual({ background: true, timeout: 30_000 });
+  expect(tools.screenshotTimeoutFor(tabOn(subAgentBrowser) as any)).toEqual({ background: true, timeout: 60_000 });
   expect(tools.screenshotTimeoutFor(tabOn(mainBrowser) as any)).toEqual({ background: false, timeout: 5000 });
   // Not an extension browser (or no browser at all): the action timeout.
   expect(tools.screenshotTimeoutFor(tabOn({}) as any)).toEqual({ background: false, timeout: 5000 });
@@ -624,7 +776,7 @@ test('browser_take_screenshot passes the background timeout to the capture', asy
   };
   const subAgentBrowser = {};
   tools.registerExtensionRelay(subAgentBrowser, { background: true, setGroupLabel: async () => {} });
-  expect(await capture(subAgentBrowser)).toBe(30_000);
+  expect(await capture(subAgentBrowser)).toBe(60_000);
   expect(await capture({})).toBe(5000);
 });
 

@@ -62,6 +62,10 @@ const silentConnect = () => process.env.PLAYWRIGHT_MCP_AGENT_SILENT !== 'off';
 const mainFocus = () => process.env.PLAYWRIGHT_MCP_FOCUS === 'on';
 // From the carrier's chrome.tabs.create to the connect page's WebSocket. Read per call: tests shorten it.
 const carrierTimeout = () => +(process.env.PWTEST_EXTENSION_CARRIER_TIMEOUT ?? 10_000);
+// Fork (03/10/2026, "mostrar só sem plateia"): a revealed capture holds the next reveal of this process back until it
+// ends, at most this long (a capture that never answers must not stop every later screenshot). Tests shorten it.
+const revealHoldMs = () => +(process.env.PWTEST_EXTENSION_REVEAL_HOLD_MS ?? 15_000);
+let revealQueue: Promise<void> = Promise.resolve();
 
 type CDPCommand = {
   id: number;
@@ -115,6 +119,9 @@ export class CDPRelayServer {
         params = [{ ...params?.[0], active: false }];
       if (this._background && method === 'chrome.debugger.attach')
         return this._attachWithFocusEmulation(this._extensionConnection, params);
+      // Fork: Chrome draws no frame for a hidden tab, so its capture waits (FORK.md § Foco zero, "Screenshot").
+      if (this._background && method === 'chrome.debugger.sendCommand' && params?.[1] === 'Page.captureScreenshot')
+        return this._captureRevealed(this._extensionConnection, params);
       return this._extensionConnection.send(method as keyof ExtensionCommandV2, params);
     };
     // Fork (patch 7): a sub-agent's relay never attaches a tab that merely entered its group (FORK.md § Silent connect).
@@ -309,6 +316,38 @@ export class CDPRelayServer {
     await connection.send('chrome.debugger.sendCommand', [params[0], 'Emulation.setFocusEmulationEnabled', { enabled: true }])
         .catch(error => debugLogger('Could not turn focus emulation on:', error));
     return result;
+  }
+
+  // Fork-only (03/10/2026, decided by the Gabriel: "mostrar só sem plateia"). The extension shows the tab inside its own
+  // window only when that window is not the focused one (nobody is looking), and never focuses a window; when it is,
+  // the capture goes on slowly (60 s ceiling, backend/screenshot.ts). The user's tab is put back even when the capture
+  // fails, and only if the revealed tab is still the active one. An extension without the command (older than 0.4.0.5)
+  // answers an error: the capture goes on as before. One reveal at a time in this process (see revealHoldMs).
+  private async _captureRevealed(connection: ExtensionConnection, params: any): Promise<any> {
+    const tabId = params[0]?.tabId;
+    const earlier = revealQueue;
+    let release!: () => void;
+    const released = new Promise<void>(resolve => release = resolve);
+    revealQueue = earlier.then(() => released);
+    await earlier;
+    const reveal = await connection.send('extension.revealForCapture', [tabId]).catch(error => {
+      debugLogger('Capture without reveal:', error?.message);
+      return undefined;
+    });
+    const revealed = !!reveal?.revealed;
+    debugLogger(`Capture of tab ${tabId}: revealed=${revealed}`);
+    if (!revealed)
+      release();
+    const hold = revealed ? setTimeout(release, revealHoldMs()) : undefined;
+    try {
+      return await connection.send('chrome.debugger.sendCommand', params);
+    } finally {
+      if (revealed) {
+        clearTimeout(hold);
+        await connection.send('extension.restoreAfterCapture', [tabId]).catch(error => debugLogger('Could not put the tab back after the capture:', error?.message));
+        release();
+      }
+    }
   }
 
   // Fork-only: relabels this connection's Chrome tab group (browser_set_group_label).

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { CaptureReveal } from './captureReveal';
+
 export function debugLog(...args: unknown[]): void {
   const enabled = true;
   if (enabled) {
@@ -76,6 +78,8 @@ export class RelayConnection {
   private _closed = false;
   private _pendingReattach = new Set<number>();
   private _recentReattach = new Set<number>();
+  // Fork (0.4.0.5): tabs shown for a capture, and the tab to put back (captureReveal.ts).
+  private _captureReveal = new CaptureReveal();
 
   onclose?: () => void;
   ontabattached?: (tabId: number) => void;
@@ -326,6 +330,15 @@ export class RelayConnection {
         throw new Error('This connection has no tab group to label');
       await this.onsetgrouplabel((message.params as string[])[0]);
       return {};
+    }
+    // Fork (0.4.0.5): show a hidden tab of this connection for a capture, then put the user's tab back (captureReveal.ts).
+    if (message.method === 'extension.revealForCapture' || message.method === 'extension.restoreAfterCapture') {
+      const tabId = (message.params as number[])[0];
+      if (message.method === 'extension.restoreAfterCapture')
+        return await this._captureReveal.restore(tabId);
+      const result = await this._captureReveal.reveal(tabId);
+      debugLog(`Capture of tab ${tabId}: revealed=${result.revealed}`);
+      return result;
     }
     if (!ALLOWED_CHROME_COMMANDS.has(message.method))
       throw new Error(`Unknown method: ${message.method}`);

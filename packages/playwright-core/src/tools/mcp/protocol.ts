@@ -76,6 +76,16 @@ export type ExtensionCommandV2 = {
     params: [label: string];
     result: void;
   };
+  // Fork-only (extension 0.4.0.5): show an attached tab for a capture when its window is not the focused one, then put
+  // the window's previous tab back (only if the revealed tab is still the active one). FORK.md § Foco zero.
+  'extension.revealForCapture': {
+    params: [tabId: number];
+    result: { revealed: boolean };
+  };
+  'extension.restoreAfterCapture': {
+    params: [tabId: number];
+    result: { restored: boolean };
+  };
 };
 
 // Protocol v2 events mirror chrome.<api>.<event>.addListener callback signatures.

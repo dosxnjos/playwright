@@ -30,9 +30,11 @@ import type { ContextConfig } from './context';
 
 const shotDebug = debug('pw:mcp:shot');
 
-// Fork-only (patch 7). A sub-agent's tab is created in the background and never shown; through the extension its
-// capture took 4-5 s on 03/10/2026 and failed at the 5 s action timeout (FORK.md § Silent connect).
-const backgroundScreenshotTimeout = 30_000;
+// Fork-only (patch 7). A background relay's tab is created in the background and never shown; Chrome draws no frame for
+// it, and its capture took 4-5 s, then ~12-31 s (live tests of 03/10/2026). The relay shows the tab for the capture when
+// nobody looks at its window (mcp/cdpRelay.ts _captureRevealed); when someone does, it captures slowly: hence 60 s
+// (FORK.md § Foco zero, "Screenshot").
+const backgroundScreenshotTimeout = 60_000;
 
 export function screenshotTimeout(config: Pick<ContextConfig, 'timeouts'>, background: boolean): number | undefined {
   const action = config.timeouts?.action;
