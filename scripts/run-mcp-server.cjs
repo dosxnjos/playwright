@@ -169,6 +169,9 @@ function envForAiSession(env, origem) {
     return env;
   const out = { ...env };
   delete out.PLAYWRIGHT_MCP_EXTENSION;
+  // Per-agent routing (FORK.md § Agent routing) stays off here until a maestro round with
+  // browsing sub-agents is measured: in --isolated each agent gets its own browser context.
+  out.PLAYWRIGHT_MCP_AGENT_ROUTING = 'off';
   return out;
 }
 

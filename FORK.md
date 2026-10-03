@@ -16,6 +16,7 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
 | 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.1` | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
 | 5 | tool descriptions warn that the current tab is shared per connection | `backend/{tabs,navigate}.ts`, `tests/mcp/capabilities.spec.ts` | not upstream |
+| 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
 
 Tab ownership: a tab is **agent-owned** (closed on disconnect) if the agent created it: the token-bypass seed, a
 popup, `browser_tabs new`, `Target.createTarget`. It is **user-owned** (only ungrouped) if the user picked it in the
@@ -33,6 +34,51 @@ Ownership edge cases (found by the adversarial review, 28/09/2026): a tab the us
 bar, DevTools opened) is demoted to user-owned and never closed; a tab opened from a tab already in the group is
 agent-owned whichever event lands first; a tab whose group call finishes after the connection closed is closed or
 ungrouped by its owner. Not covered by any test (extension tests do not run on Windows): check by hand.
+
+## Agent routing (patch 6)
+
+One Claude Code session runs one server process, and its sub-agents (Agent tool, Workflow agents) call the browser
+through that same process. Without routing they share one current tab, `browser_close` closes everyone's tabs and
+`browser_set_group_label` renames the main agent's group. `mcp/agentRouter.ts` wraps the backend factory
+(`program.ts:189`) and keeps one backend per caller, created on the caller's first tool call by the same factory the
+HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-abas-por-agente.md`.
+
+- **Contract.** The caller comes in `arguments._meta`, stamped outside the model by a PreToolUse hook
+  (`~/.claude/hooks/playwright-agente.cjs carimbo`, matcher `mcp__playwright__.*`; Phase 2 of the roadmap, not
+  installed yet, so today every call is `main`):
+  - `agente`: the routing key (`agent_id`, or `main`). Missing or not matching `^[\w-]{1,64}$` -> `main`, which is
+    today's behavior, so without the hook the router is inert.
+  - `agenteTipo`: only names the group: `gp` (general-purpose), `wf` (workflow-subagent), else the type itself.
+    Group title of an agent: `<main's label, or the client name> · <type>-<last 4 chars of the key>`.
+  - `sessao`: the session id; read from Phase 3 on (release markers), ignored for now.
+  - The zod schemas drop `_meta`, so tools never see it; page WebMCP tools get it stripped too (`browserBackend.ts`).
+- **When it is on:** `--extension` (each agent gets its own relay, connection and tab group) and `--isolated` (each
+  agent gets its own context on the shared browser). **Off** in the persistent mode (a second backend fails with
+  "use --isolated"), with `--cdp-endpoint`, a remote endpoint or `--shared-browser-context`, and with
+  `PLAYWRIGHT_MCP_AGENT_ROUTING=off`. AI-opened sessions (`ia:*`) get that `off` from the wrapper (`envForAiSession`)
+  until a maestro round with browsing sub-agents is measured.
+- **Per agent:** current tab, `eN` refs, snapshot, `browser_close` (drops only the caller's backend) and
+  `browser_set_group_label` (only the caller's group; the registry is a `WeakMap` per `Browser`).
+- **Lifecycle:** a non-`main` agent's backend is disposed after `PLAYWRIGHT_MCP_AGENT_IDLE_MS` (default 30 min)
+  without calls, never with a call in flight; `main` never expires. A backend's `disconnected` only drops that key:
+  the router never re-emits it (the server would dispose every agent, main included). Everything goes on session end.
+- **Log:** `DEBUG=pw:mcp:router` prints `create key=… clientName=…` and `drop key=…`; past 8 live agents one stderr
+  warning (tab group colors repeat from the 9th), no cap.
+- **Limitations:**
+  - an unhandled rejection in one agent's page shows up in the next response of every agent (each Context hooks
+    `process.on`; same as the HTTP mode);
+  - `--isolated`: agents share no cookies or storage (one context each);
+  - `tools/list` only lists the main agent's page WebMCP tools (a sub-agent can still call its own page's tool);
+  - in extension mode, closing an agent's last tab closes its connection: the next call reconnects and the Chrome
+    window takes focus again (navigate in the last tab instead of closing it).
+- **`browser_close` text** says only what is true in every mode (your connection and your tabs; the next call
+  reconnects). It does not promise that other agents keep theirs: with routing off or inert (no hook stamp) the
+  backend is shared and the close takes everyone's tabs. That line comes with the removal of patch 5's texts, after
+  the live gate of roadmap 2.3.
+- **Tests:** `tests/mcp/agent-routing.spec.ts` covers `--isolated` (including idle dispose measured by context count
+  and no idle with a call in flight) plus a fake-backend case for the drop-by-name on `browser_close` (the path
+  extension mode needs when `disconnected` does not follow; in `--isolated` `disconnected` always comes first);
+  extension mode is checked by hand (roadmap 1.7, pending).
 
 ## Known limitations
 
@@ -93,8 +139,10 @@ wipes `node_modules` under MCP servers that other sessions are running from this
 
 Likely conflicts: `backend/tools.ts` (keep both tool lists), `tests/mcp/capabilities.spec.ts` (keep
 `browser_set_group_label` in the list), `.github/workflows/*` (modify/delete: `git rm` again; also drop any new
-workflow with an automatic trigger, e.g. `check_copilot_models.yml` on 01/10/2026), `ui/connect.css`.
-Then check: `npm run ctest-mcp -- group-label capabilities tabs core`, plus from `packages/extension/`
+workflow with an automatic trigger, e.g. `check_copilot_models.yml` on 01/10/2026), `ui/connect.css`,
+`mcp/program.ts:189` (keep `withAgentRouting(factory, config)` around whatever upstream passes to `start`),
+`backend/common.ts:27` (keep the fork's `browser_close` text), `tools/index.ts` (keep the `withAgentRouting` export).
+Then check: `npm run ctest-mcp -- group-label capabilities tabs core agent-routing`, plus from `packages/extension/`
 `npx tsc -p tsconfig.json --noEmit` and `npx tsc -p tsconfig.ui.json --noEmit`.
 
 ⚠️ `npm run flint` does **not** cover `packages/extension/` (its two tsconfigs are not in the root project): a real

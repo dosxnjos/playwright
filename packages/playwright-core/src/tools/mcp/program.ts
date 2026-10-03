@@ -22,6 +22,7 @@ import { connectToBrowserEndpoint, createBrowserWithInfo } from './browserFactor
 import { BrowserBackend } from '../backend/browserBackend';
 import { filteredTools } from '../backend/tools';
 import { testDebug } from './log';
+import { withAgentRouting } from './agentRouter';
 import { packageJSON } from '../../package';
 
 import type { Command } from 'commander';
@@ -186,6 +187,6 @@ export function decorateMCPCommand(command: Command) {
             });
           },
         };
-        await mcpServer.start(factory, config.server);
+        await mcpServer.start(withAgentRouting(factory, config), config.server);
       });
 }
