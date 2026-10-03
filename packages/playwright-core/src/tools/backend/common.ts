@@ -24,7 +24,7 @@ const close = defineTool({
   schema: {
     name: 'browser_close',
     title: 'Close browser',
-    description: 'Close your browser connection and every tab you opened (in extension mode, your tab group); the next browser call reconnects.',
+    description: 'Close your browser connection and every tab you opened (in extension mode, your tab group). Other agents keep theirs; the next browser call reconnects.',
     inputSchema: z.object({}),
     type: 'action',
   },

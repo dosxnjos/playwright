@@ -15,7 +15,6 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
 | 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.1` | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
-| 5 | tool descriptions warn that the current tab is shared per connection | `backend/{tabs,navigate}.ts`, `tests/mcp/capabilities.spec.ts` | not upstream |
 | 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
 
 Tab ownership: a tab is **agent-owned** (closed on disconnect) if the agent created it: the token-bypass seed, a
@@ -44,8 +43,8 @@ through that same process. Without routing they share one current tab, `browser_
 HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-abas-por-agente.md`.
 
 - **Contract.** The caller comes in `arguments._meta`, stamped outside the model by a PreToolUse hook
-  (`~/.claude/hooks/playwright-agente.cjs carimbo`, matcher `mcp__playwright__.*`; Phase 2 of the roadmap, not
-  installed yet, so today every call is `main`):
+  (`~/.claude/hooks/playwright-agente.cjs carimbo`, matcher `mcp__playwright__.*`, installed 03/10/2026; without
+  it every call is `main`):
   - `agente`: the routing key (`agent_id`, or `main`). Missing or not matching `^[\w-]{1,64}$` -> `main`, which is
     today's behavior, so without the hook the router is inert.
   - `agenteTipo`: only names the group: `gp` (general-purpose), `wf` (workflow-subagent), else the type itself.
@@ -71,14 +70,16 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
   - `tools/list` only lists the main agent's page WebMCP tools (a sub-agent can still call its own page's tool);
   - in extension mode, closing an agent's last tab closes its connection: the next call reconnects and the Chrome
     window takes focus again (navigate in the last tab instead of closing it).
-- **`browser_close` text** says only what is true in every mode (your connection and your tabs; the next call
-  reconnects). It does not promise that other agents keep theirs: with routing off or inert (no hook stamp) the
-  backend is shared and the close takes everyone's tabs. That line comes with the removal of patch 5's texts, after
-  the live gate of roadmap 2.3.
+- **`browser_close` text** promises that other agents keep their tabs. That is only true with the hook installed;
+  with routing off (`ia:*`, persistent) the backend is shared and the close takes everyone's tabs. The old patch 5
+  (tool texts warning that the current tab is shared) was dropped after the live gate (roadmap 2.3, 03/10/2026):
+  `backend/{tabs,navigate}.ts` are upstream's again.
 - **Tests:** `tests/mcp/agent-routing.spec.ts` covers `--isolated` (including idle dispose measured by context count
   and no idle with a call in flight) plus a fake-backend case for the drop-by-name on `browser_close` (the path
-  extension mode needs when `disconnected` does not follow; in `--isolated` `disconnected` always comes first);
-  extension mode is checked by hand (roadmap 1.7, pending).
+  extension mode needs when `disconnected` does not follow; in `--isolated` `disconnected` always comes first).
+  Extension mode was checked by hand on 03/10/2026 (roadmap 1.7 and 2.3: one group per agent, scoped close and label).
+- **Another machine:** copy the hook from `C:\Dev\cerebro\harness-espelho\` to `~/.claude/hooks/` and add the
+  PreToolUse entry of roadmap 2.2 to `~/.claude/settings.json`; without it the agents of a session share one tab again.
 
 ## Known limitations
 
