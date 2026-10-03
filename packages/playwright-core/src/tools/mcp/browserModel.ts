@@ -33,9 +33,14 @@
  *     same model inputs and are translated into CDP events on the fly.
  */
 
+import debug from 'debug';
+
 import { logUnhandledError } from './log';
 
 import type { DebuggerSession, Debuggee, Tab } from './protocol';
+
+// Fork-only (patch 7): same channel as cdpRelay.ts, so the live log reads in one place.
+const debugLogger = debug('pw:mcp:relay');
 
 export type CDPMessage = {
   id?: number;
@@ -70,9 +75,18 @@ export class BrowserModel {
   private _tabSessions = new Map<number, TabSession>();
   private _autoAttach = false;
   private _nextSessionId = 1;
+  // Fork-only (patch 7): a sub-agent's relay admits, after the handshake, only a tab it knows or a popup of its tabs.
+  private _ownTabsOnly: boolean;
+  private _initialized = false;
 
-  constructor(sendToExtension: SendCommand) {
+  constructor(sendToExtension: SendCommand, options: { ownTabsOnly?: boolean } = {}) {
     this._sendToExtension = sendToExtension;
+    this._ownTabsOnly = !!options.ownTabsOnly;
+  }
+
+  // Fork-only (patch 7): the extension's initial tabs (the seed) are in.
+  onInitialized(): void {
+    this._initialized = true;
   }
 
   // Wires the model's CDP output sink. Called by the handler once the
@@ -92,6 +106,11 @@ export class BrowserModel {
   onTabCreated(tab: Tab): void {
     if (tab.id === undefined)
       return;
+    // Fork (patch 7): a tab dropped into a sub-agent's group (a leftover, a user tab) is not its to read or drive.
+    if (this._ownTabsOnly && this._initialized && !this._knownTabs.has(tab.id) && !(tab.openerTabId !== undefined && this._knownTabs.has(tab.openerTabId))) {
+      debugLogger(`Ignoring tab ${tab.id}: entered a background relay's group without an opener among its tabs`);
+      return;
+    }
     this._knownTabs.set(tab.id, tab);
     if (this._autoAttach)
       void this._attachTab(tab.id).catch(logUnhandledError);

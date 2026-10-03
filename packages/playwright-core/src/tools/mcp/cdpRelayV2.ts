@@ -40,8 +40,8 @@ export class ExtensionProtocolV2 {
   // relay — the model itself is oblivious to this phase.
   private _ready = new ManualPromise<void>();
 
-  constructor(sendCommand: SendCommand) {
-    this._model = new BrowserModel(sendCommand);
+  constructor(sendCommand: SendCommand, options: { ownTabsOnly?: boolean } = {}) {
+    this._model = new BrowserModel(sendCommand, options);
     void this._ready.catch(logUnhandledError);
   }
 
@@ -86,6 +86,7 @@ export class ExtensionProtocolV2 {
         break;
       }
       case 'extension.initialized': {
+        this._model.onInitialized();
         this._ready.resolve();
         break;
       }

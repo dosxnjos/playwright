@@ -26,6 +26,8 @@ export const relayScope = new AsyncLocalStorage<{ background: boolean }>();
 // through browserFactory/program/BrowserBackend, which upstream keeps rewriting.
 export interface ExtensionSessionRelay {
   setGroupLabel(label: string): Promise<void>;
+  // Patch 7: a sub-agent's relay (tabs never shown); browser_take_screenshot gives it a longer timeout.
+  readonly background: boolean;
 }
 
 const relays = new WeakMap<object, ExtensionSessionRelay>();

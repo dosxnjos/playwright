@@ -16,13 +16,36 @@
 
 import path from 'path';
 
+import debug from 'debug';
 import * as z from 'zod';
 import { formatObject } from '@isomorphic/stringUtils';
+import { monotonicTime } from '@isomorphic/time';
 
 import { defineTabTool } from './tool';
 import { optionalElementSchema } from './snapshot';
+import { extensionRelayFor } from './extensionSession';
 
 import type * as playwright from '../../..';
+import type { ContextConfig } from './context';
+
+const shotDebug = debug('pw:mcp:shot');
+
+// Fork-only (patch 7). A sub-agent's tab is created in the background and never shown; through the extension its
+// capture took 4-5 s on 03/10/2026 and failed at the 5 s action timeout (FORK.md § Silent connect).
+const backgroundScreenshotTimeout = 30_000;
+
+export function screenshotTimeout(config: Pick<ContextConfig, 'timeouts'>, background: boolean): number | undefined {
+  const action = config.timeouts?.action;
+  return background ? Math.max(action ?? 0, backgroundScreenshotTimeout) : action;
+}
+
+// Fork-only (patch 7): the relay is registered for the tab's Browser (backend/extensionSession.ts), never its context.
+type ScreenshotTab = { page: { context(): { browser(): object | null } }, context: { config: Pick<ContextConfig, 'timeouts'> } };
+
+export function screenshotTimeoutFor(tab: ScreenshotTab): { background: boolean, timeout: number | undefined } {
+  const background = !!extensionRelayFor(tab.page.context().browser())?.background;
+  return { background, timeout: screenshotTimeout(tab.context.config, background) };
+}
 
 type ImageFormat = 'png' | 'jpeg' | 'webp';
 
@@ -60,17 +83,28 @@ const screenshot = defineTabTool({
       throw new Error('fullPage cannot be used with element screenshots.');
 
     const fileType: ImageFormat = params.type ?? inferTypeFromFilename(params.filename) ?? 'png';
+    // Fork (patch 7): a sub-agent's background tab captures slowly through the extension.
+    const { background, timeout } = screenshotTimeoutFor(tab);
     const options: playwright.PageScreenshotOptions = {
       type: fileType,
       quality: fileType === 'jpeg' ? 90 : undefined,
       scale: params.scale,
-      ...tab.actionTimeoutOptions,
+      timeout,
       ...(params.fullPage !== undefined && { fullPage: params.fullPage })
     };
 
     const screenshotTargetLabel = params.target ? params.element || 'element' : (params.fullPage ? 'full page' : 'viewport');
     const target = params.target ? await tab.targetLocator({ element: params.element, target: params.target }) : null;
-    const data = target ? await target.locator.screenshot(options) : await tab.page.screenshot(options);
+    const startTime = monotonicTime();
+    let outcome = 'failed';
+    let data: Buffer;
+    try {
+      data = target ? await target.locator.screenshot(options) : await tab.page.screenshot(options);
+      outcome = 'ok';
+    } finally {
+      // Fork: lets a live test measure the capture (DEBUG=pw:mcp:shot), the failed ones included.
+      shotDebug(`screenshot ${screenshotTargetLabel} background=${background} timeout=${options.timeout} took ${Math.round(monotonicTime() - startTime)}ms ${outcome}`);
+    }
 
     const resolvedFile = await response.resolveClientOutputFile({ prefix: target ? 'element' : 'page', ext: fileType, suggestedFilename: params.filename }, `Screenshot of ${screenshotTargetLabel}`);
 

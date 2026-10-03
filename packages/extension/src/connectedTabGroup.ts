@@ -187,7 +187,9 @@ export class ConnectedTabGroup {
       // No pending owner: a raw user drag, except a tab opened from a tab that is already in
       // the group (popup, ctrl+click), which Chrome drops into the opener's group and which the
       // relay attaches on its own: agent-owned, whichever of the two events lands first.
-      const fromGroupTab = tab.openerTabId !== undefined && this._groupTabIds.has(tab.openerTabId);
+      // Fork (patch 7): the opener must be a tab this connection drives. A group tab the relay ignored (a user's tab
+      // dragged into a sub-agent's group) drives nothing, so what it opened stays the user's.
+      const fromGroupTab = tab.openerTabId !== undefined && this._connection.attachedTabs.has(tab.openerTabId);
       this._claimOwner(tabId, fromGroupTab ? 'agent' : 'user');
       if (!isNonDebuggableUrl(tab.url))
         this._connection.attachTab(tab);
@@ -242,11 +244,13 @@ export class ConnectedTabGroup {
     this._pendingOwner.clear();
     if (userOwnedTabs.length)
       void ungroupTabs(userOwnedTabs);
-    if (agentOwnedTabs.length) {
-      retryOnDrag(() => chrome.tabs.remove(agentOwnedTabs)).catch(error => {
-        debugLog('Error closing agent-owned tabs on close:', error);
-      });
-    }
+    // One by one: a batch remove aborts on the first tab that is gone, and every other agent tab would survive.
+    void Promise.allSettled(agentOwnedTabs.map(tabId => retryOnDrag(() => chrome.tabs.remove(tabId)))).then(results => {
+      for (const result of results) {
+        if (result.status === 'rejected')
+          debugLog('Error closing agent-owned tabs on close:', result.reason);
+      }
+    });
     // Agent seed still on connect.html: never entered the group, so it is not in `groupTabs`.
     const seedTabId = this._agentSeedTabId;
     this._agentSeedTabId = undefined;

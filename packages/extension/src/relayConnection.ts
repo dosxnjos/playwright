@@ -54,6 +54,14 @@ const CHROME_EVENT_METHODS = [
   'chrome.tabs.onRemoved',
 ];
 
+// Fork (patch 7): Chrome's openerTabId names the tab that was ACTIVE when a popup opened, not the tab that opened it,
+// and a sub-agent's tab is never active (Chromium, 03/10/2026). With the webNavigation permission a popup is forwarded
+// from onCreatedNavigationTarget, whose sourceTabId is the real opener, and the raw onCreated is not (it would hand a
+// sub-agent's popup to whichever connection owns the active tab). Without it (older manifest), upstream's path.
+function popupSourceEvents(): typeof chrome.webNavigation.onCreatedNavigationTarget | undefined {
+  return (globalThis as any).chrome?.webNavigation?.onCreatedNavigationTarget;
+}
+
 const REATTACH_DELAY_MS = 150;
 const REATTACH_VERIFY_MS = 2500;
 const REATTACH_COOLDOWN_MS = 3000;
@@ -151,6 +159,21 @@ export class RelayConnection {
         remove: () => target.obj[target.name].removeListener(listener),
       });
     }
+    const popupEvents = popupSourceEvents();
+    if (popupEvents) {
+      const listener = (details: chrome.webNavigation.WebNavigationSourceCallbackDetails) => this._onPopupCreated(details);
+      popupEvents.addListener(listener);
+      this._eventListeners.push({ remove: () => popupEvents.removeListener(listener) });
+    }
+  }
+
+  // Fork (patch 7): a popup opened by one of our tabs, forwarded the way any new tab is, with the real opener.
+  private _onPopupCreated(details: chrome.webNavigation.WebNavigationSourceCallbackDetails): void {
+    if (this._closed || !this._attachedTabs.has(details.sourceTabId))
+      return;
+    chrome.tabs.get(details.tabId).then(
+        tab => this.attachTab({ ...tab, openerTabId: details.sourceTabId }),
+        () => {}); // Already closed.
   }
 
   private _onClose() {
@@ -245,6 +268,9 @@ export class RelayConnection {
       case 'chrome.debugger.onDetach':
         return (args[0] as chrome.debugger.Debuggee | undefined)?.tabId;
       case 'chrome.tabs.onCreated': {
+        // Fork (patch 7): popups come from onCreatedNavigationTarget when it is there (see popupSourceEvents).
+        if (popupSourceEvents())
+          return undefined;
         const tab = args[0] as chrome.tabs.Tab;
         // Forward only popups opened by an attached tab; report the opener so cdpRelay
         // can filter / decide. We use the openerTabId for the attached-tab check.

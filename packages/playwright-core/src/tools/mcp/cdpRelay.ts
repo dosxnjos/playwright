@@ -111,7 +111,8 @@ export class CDPRelayServer {
         return this._attachWithFocusEmulation(this._extensionConnection, params);
       return this._extensionConnection.send(method as keyof ExtensionCommandV2, params);
     };
-    this._handler = new ExtensionProtocolV2(sendCommand);
+    // Fork (patch 7): a sub-agent's relay never attaches a tab that merely entered its group (FORK.md § Silent connect).
+    this._handler = new ExtensionProtocolV2(sendCommand, { ownTabsOnly: this._background });
 
     const uuid = crypto.randomUUID();
     this._cdpPath = `/cdp/${uuid}`;
@@ -144,6 +145,11 @@ export class CDPRelayServer {
 
   cdpEndpoint() {
     return `${this._wsHost}${this._cdpPath}`;
+  }
+
+  // Fork-only (patch 7): read by browser_take_screenshot (backend/extensionSession.ts) for its longer timeout.
+  get background(): boolean {
+    return this._background;
   }
 
   extensionEndpoint() {

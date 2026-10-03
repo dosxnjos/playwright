@@ -38,7 +38,8 @@ export { openDashboardApp, openDashboardForContext } from './dashboard/dashboard
 export { withAgentRouting } from './mcp/agentRouter';
 // Fork-only (patch 7): exported for tests/mcp/agent-silent.spec.ts.
 export { CDPRelayServer } from './mcp/cdpRelay';
-export { relayScope } from './backend/extensionSession';
+export { relayScope, registerExtensionRelay } from './backend/extensionSession';
+export { screenshotTimeout, screenshotTimeoutFor } from './backend/screenshot';
 
 export type { ContextConfig } from './backend/context';
 export type { CallToolRequest, CallToolResult, Tool } from './backend/tool';

@@ -53,15 +53,27 @@ class FakeExtension {
     ws.on('message', data => void this._onMessage(JSON.parse(data.toString())));
   }
 
-  static async connect(endpoint: string, mode: CreateMode = 'connect', lateMs = 0): Promise<FakeExtension> {
+  // `seedTabs` are pushed before the handshake ends, like the real extension's initial attachTab (the seed).
+  static async connect(endpoint: string, mode: CreateMode = 'connect', lateMs = 0, seedTabs: object[] = []): Promise<FakeExtension> {
     const ws = new WebSocket(endpoint);
     await new Promise((resolve, reject) => {
       ws.once('open', resolve);
       ws.once('error', reject);
     });
     const fake = new FakeExtension(ws, mode, lateMs);
+    for (const tab of seedTabs)
+      fake.emit('chrome.tabs.onCreated', [tab]);
     ws.send(JSON.stringify({ method: 'extension.initialized', params: [] }));
     return fake;
+  }
+
+  // An event the extension forwards to the relay (chrome.tabs.onCreated of a tab that entered the group, a detach...).
+  emit(method: string, params: any[]) {
+    this._ws.send(JSON.stringify({ method, params }));
+  }
+
+  attached() {
+    return this.received.filter(c => c.method === 'chrome.debugger.attach').map(c => c.params[0].tabId);
   }
 
   removed() {
@@ -93,7 +105,7 @@ class FakeExtension {
         this.spawned.push(await FakeExtension.connect(relayUrl));
       result = { ...TAB, active: message.params[0].active ?? true };
     } else if (message.method === 'chrome.debugger.sendCommand' && message.params[1] === 'Target.getTargetInfo') {
-      result = { targetInfo: { targetId: 'T7', type: 'page', url: 'about:blank', title: '' } };
+      result = { targetInfo: { targetId: `T${message.params[0].tabId}`, type: 'page', url: 'about:blank', title: '' } };
     }
     this._ws.send(JSON.stringify({ id: message.id, result }));
   }
@@ -418,4 +430,128 @@ test('the router creates every agent but main inside the background relay scope'
   } finally {
     await router.dispose?.();
   }
+});
+
+// Fork (patch 7, defect 1 of the 03/10 live test): in a sub-agent's relay, a tab that shows up in its group after the
+// handshake is attached only if the relay already knows it (re-attach) or its opener is one of its tabs (popup). A
+// leftover tab the user (or Chrome) drops into the group stays unattached, so the sub-agent never reads or drives it.
+const SEED = { ...TAB, url: 'chrome-extension://x/connect.html' };
+const INTRUDER = { ...TAB, id: 42, url: 'https://example.net/#x' };
+const POPUP = { ...TAB, id: 43, url: 'https://example.net/popup', openerTabId: 7 };
+
+// A relay whose extension came up with tab 7 as its seed, and Playwright on its CDP side with auto-attach on.
+async function seededRelay(background: boolean, options: { beforeAutoAttach?: (extension: FakeExtension) => void } = {}) {
+  const relay = await startRelay(background);
+  const established = relay.establishExtensionConnection(background ? 'main · gp-1111' : 'main');
+  // No carrier in these tests: the (stubbed) chrome.exe launch, then the connect page connects by hand.
+  const extension = await FakeExtension.connect(relay.extensionEndpoint(), 'connect', 0, [SEED]);
+  fakes.push(extension);
+  await established;
+  options.beforeAutoAttach?.(extension);
+  const playwright = await FakePlaywright.connect(relay.cdpEndpoint());
+  fakes.push(playwright);
+  const targets: string[] = [];
+  playwright.on('event', e => e.method === 'Target.attachedToTarget' && targets.push(e.params.targetInfo.targetId));
+  await playwright.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  const attachedTo = (targetId: string, times = 1) => expect.poll(() => targets.filter(t => t === targetId).length).toBe(times);
+  return { relay, extension, playwright, targets, attachedTo };
+}
+
+test('a sub-agent relay attaches its seed but not a tab that entered its group without an opener', async () => {
+  const { extension, attachedTo, targets } = await seededRelay(true);
+  await attachedTo('T7');
+  extension.emit('chrome.tabs.onCreated', [INTRUDER]);
+  // Same socket, same order: once the popup is attached, the intruder's event was handled before it.
+  extension.emit('chrome.tabs.onCreated', [POPUP]);
+  await attachedTo('T43');
+  expect(extension.attached()).toEqual([7, 43]);
+  expect(targets).toEqual(['T7', 'T43']);
+});
+
+test('a sub-agent relay ignores a tab that entered its group between the handshake and auto-attach', async () => {
+  const { extension, attachedTo } = await seededRelay(true, { beforeAutoAttach: extension => extension.emit('chrome.tabs.onCreated', [INTRUDER]) });
+  await attachedTo('T7');
+  expect(extension.attached()).toEqual([7]);
+});
+
+test('a sub-agent relay re-attaches a tab it already knows', async () => {
+  const { extension, attachedTo } = await seededRelay(true);
+  await attachedTo('T7');
+  // What the extension sends when the debugger detaches (navigation to another process) and it re-attaches the tab.
+  extension.emit('chrome.debugger.onDetach', [{ tabId: 7 }, 'target_closed']);
+  extension.emit('chrome.tabs.onCreated', [SEED]);
+  await attachedTo('T7', 2);
+  expect(extension.attached()).toEqual([7, 7]);
+});
+
+for (const [name, background, silent] of [['the main agent relay', false, undefined], ['PLAYWRIGHT_MCP_AGENT_SILENT=off', true, 'off']] as const) {
+  test(`${name} attaches a tab that entered its group without an opener (upstream behavior)`, async () => {
+    if (silent)
+      process.env.PLAYWRIGHT_MCP_AGENT_SILENT = silent;
+    const { extension, attachedTo } = await seededRelay(background);
+    await attachedTo('T7');
+    extension.emit('chrome.tabs.onCreated', [INTRUDER]);
+    await attachedTo('T42');
+    expect(extension.attached()).toEqual([7, 42]);
+  });
+}
+
+// Fork (patch 7, defect 2 of the 03/10 live test): a screenshot of a sub-agent's never-shown background tab took 4-5 s
+// and failed at the 5 s action timeout; the main agent keeps the configured one.
+test('a background relay says so; PLAYWRIGHT_MCP_AGENT_SILENT=off turns it off', async () => {
+  expect((await startRelay(true)).background).toBe(true);
+  expect((await startRelay(false)).background).toBe(false);
+  expect((await startRelay()).background).toBe(false);
+  process.env.PLAYWRIGHT_MCP_AGENT_SILENT = 'off';
+  expect((await startRelay(true)).background).toBe(false);
+});
+
+test('screenshot timeout: at least 30 s for a background tab, the action timeout otherwise', () => {
+  expect(tools.screenshotTimeout({ timeouts: { action: 5000 } }, true)).toBe(30_000);
+  expect(tools.screenshotTimeout({ timeouts: { action: 40_000 } }, true)).toBe(40_000);
+  expect(tools.screenshotTimeout({ timeouts: { action: 5000 } }, false)).toBe(5000);
+  expect(tools.screenshotTimeout({}, false)).toBeUndefined();
+});
+
+// What browser_take_screenshot reads: the relay registered for the tab's Browser (not its context or page).
+test('screenshot timeout of a tab: from the relay registered for its browser', () => {
+  const tabOn = (browser: object | null) => ({ page: { context: () => ({ browser: () => browser }) }, context: { config: { timeouts: { action: 5000 } } } });
+  const subAgentBrowser = {};
+  const mainBrowser = {};
+  tools.registerExtensionRelay(subAgentBrowser, { background: true, setGroupLabel: async () => {} });
+  tools.registerExtensionRelay(mainBrowser, { background: false, setGroupLabel: async () => {} });
+  expect(tools.screenshotTimeoutFor(tabOn(subAgentBrowser) as any)).toEqual({ background: true, timeout: 30_000 });
+  expect(tools.screenshotTimeoutFor(tabOn(mainBrowser) as any)).toEqual({ background: false, timeout: 5000 });
+  // Not an extension browser (or no browser at all): the action timeout.
+  expect(tools.screenshotTimeoutFor(tabOn({}) as any)).toEqual({ background: false, timeout: 5000 });
+  expect(tools.screenshotTimeoutFor(tabOn(null) as any)).toEqual({ background: false, timeout: 5000 });
+});
+
+test('browser_take_screenshot passes the background timeout to the capture', async () => {
+  const screenshot = tools.browserTools.find(tool => tool.schema.name === 'browser_take_screenshot')!;
+  const capture = async (browser: object) => {
+    let options: any;
+    const tab = {
+      modalStates: () => [],
+      context: { config: { timeouts: { action: 5000 } } },
+      page: { context: () => ({ browser: () => browser }), screenshot: async (o: any) => { options = o; return Buffer.from(''); } },
+    };
+    const response = { resolveClientOutputFile: async () => ({ relativeName: 'page.png' }), addCode: () => {}, addFileResult: async () => {}, registerImageResult: async () => {}, addError: () => {} };
+    await screenshot.handle({ ensureTab: async () => tab } as any, { scale: 'css' } as any, response as any, undefined as any);
+    return options.timeout;
+  };
+  const subAgentBrowser = {};
+  tools.registerExtensionRelay(subAgentBrowser, { background: true, setGroupLabel: async () => {} });
+  expect(await capture(subAgentBrowser)).toBe(30_000);
+  expect(await capture({})).toBe(5000);
+});
+
+test('browser_take_screenshot logs its duration, the background flag and the timeout on pw:mcp:shot', async ({ startClient, server }) => {
+  // The MCP server is a real child process: undo this file's spawn stub.
+  (childProcess as any).spawn = realSpawn;
+  const { client, stderr } = await startClient({ env: { DEBUG: 'pw:mcp:shot' } });
+  await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
+  await client.callTool({ name: 'browser_take_screenshot' });
+  // The fixture runs the server with --timeout-action=10000; not an extension relay, so not background.
+  await expect.poll(() => stderr()).toMatch(/pw:mcp:shot screenshot viewport background=false timeout=10000 took \d+ms ok/);
 });
