@@ -201,6 +201,127 @@ function envForActiveProfile(env, argv) {
   return { ...env, PLAYWRIGHT_MCP_PROFILE_DIR_NAME: profile };
 }
 
+// Every tool call leaves a snapshot (`page-<timestamp>.yml`) or a log (`console-<timestamp>.log`)
+// in `<cwd>/.playwright-mcp` (backend/context.ts::outputDir), and nothing ever removes them: on
+// 2026-10-03 C:\Dev\unclick held 605 files / 110 MB going back three months. Each launch prunes the
+// generated ones older than the retention (default 7 days; the agent reads its own session's snapshots
+// by path, so a recent one must survive). Only first-level FILES whose name is the server's generated
+// pattern go: never a subfolder, never a name someone chose (a screenshot saved on purpose). The prune
+// runs after the server is spawned, all async, and a failure only reaches stderr: it can neither delay
+// the ~30 s MCP startup nor kill it. PLAYWRIGHT_MCP_OUTPUT_RETENTION_DAYS=0 turns it off.
+const GENERATED_OUTPUT_NAME = /^(page|console|network|trace|video)-\d{4}-\d{2}-\d{2}T[\d-]+Z?(\.\w+)+$/;
+const DEFAULT_RETENTION_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function retentionDays(env, logFn = log) {
+  const raw = env.PLAYWRIGHT_MCP_OUTPUT_RETENTION_DAYS;
+  if (raw === undefined || raw === '')
+    return DEFAULT_RETENTION_DAYS;
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days < 0) {
+    logFn(`PLAYWRIGHT_MCP_OUTPUT_RETENTION_DAYS="${raw}" is not a number of days >= 0, using ${DEFAULT_RETENTION_DAYS}`);
+    return DEFAULT_RETENTION_DAYS;
+  }
+  return days;
+}
+
+// Same folders the server writes to: the default `<cwd>/.playwright-mcp` plus an explicit output dir
+// (PLAYWRIGHT_MCP_OUTPUT_DIR or `--output-dir`), both resolved against cwd like the server does.
+function outputDirsToPrune(cwd, env, argv) {
+  const dirs = [path.join(cwd, '.playwright-mcp')];
+  if (env.PLAYWRIGHT_MCP_OUTPUT_DIR)
+    dirs.push(path.resolve(cwd, env.PLAYWRIGHT_MCP_OUTPUT_DIR));
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--output-dir' && argv[i + 1])
+      dirs.push(path.resolve(cwd, argv[i + 1]));
+    else if (argv[i].startsWith('--output-dir='))
+      dirs.push(path.resolve(cwd, argv[i].slice('--output-dir='.length)));
+  }
+  return [...new Set(dirs)];
+}
+
+// Windows answers EPERM (not ENOENT) to an unlink of a file that another process is deleting at that
+// very moment (measured 2026-10-03: two prunes on the same 50 files, 7 EPERM). Give the other delete
+// a moment to land; if the file is then gone, the race was harmless.
+async function removedByAnotherLaunch(file, error) {
+  if (error.code !== 'EPERM' && error.code !== 'EBUSY')
+    return false;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  try {
+    await fs.promises.lstat(file);
+    return false;
+  } catch (statError) {
+    return statError.code === 'ENOENT';
+  }
+}
+
+// Prunes one folder. ENOENT is not an error: a cwd without `.playwright-mcp` is the common case, and
+// every Claude Code session starts its own wrapper, so two launches race on the same files.
+async function pruneOutputDir(dir, { days, now = Date.now(), dryRun = false, log: logFn = log }) {
+  const result = { dir, scanned: 0, removed: 0, bytes: 0, errors: 0 };
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      result.errors++;
+      logFn(`output prune: cannot read ${dir}: ${error.message}`);
+    }
+    return result;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !GENERATED_OUTPUT_NAME.test(entry.name))
+      continue;
+    result.scanned++;
+    const file = path.join(dir, entry.name);
+    try {
+      const stat = await fs.promises.lstat(file);
+      if (now - stat.mtimeMs <= days * DAY_MS)
+        continue;
+      if (!dryRun)
+        await fs.promises.unlink(file);
+      result.removed++;
+      result.bytes += stat.size;
+    } catch (error) {
+      if (error.code === 'ENOENT' || await removedByAnotherLaunch(file, error))
+        continue;
+      result.errors++;
+      logFn(`output prune: cannot remove ${file}: ${error.message}`);
+    }
+  }
+  return result;
+}
+
+// Called by main() AFTER the server is spawned. The work starts on the next turn of the event loop,
+// so the caller is never held up, and the returned promise never rejects (an unhandled rejection
+// would kill this wrapper, and the server with it).
+function schedulePrune({ cwd, env, argv, now, dryRun, log: logFn = log }) {
+  const safeLog = message => {
+    try {
+      logFn(message);
+    } catch {
+      // A broken log must not break the start either.
+    }
+  };
+  return new Promise(resolve => setImmediate(resolve)).then(async () => {
+    const days = retentionDays(env, safeLog);
+    if (days === 0)
+      return [];
+    const results = [];
+    for (const dir of outputDirsToPrune(cwd, env, argv))
+      results.push(await pruneOutputDir(dir, { days, now, dryRun, log: safeLog }));
+    const removed = results.reduce((sum, r) => sum + r.removed, 0);
+    if (removed) {
+      const mb = results.reduce((sum, r) => sum + r.bytes, 0) / 1024 / 1024;
+      safeLog(`output prune: removed ${removed} generated file(s) older than ${days} day(s), ${mb.toFixed(1)} MB`);
+    }
+    return results;
+  }).catch(error => {
+    safeLog(`output prune failed: ${error && error.message || error}`);
+    return [];
+  });
+}
+
 function main() {
   const rawArgv = process.argv.slice(2);
   const argv = argvForAiSession(rawArgv, process.env.CENTRAL_ORIGEM);
@@ -217,9 +338,20 @@ function main() {
   } else {
     runAndExit(process.execPath, [ENTRY, ...argv], { env });
   }
+  // After the spawn, never before: see schedulePrune.
+  schedulePrune({ cwd: process.cwd(), env, argv });
 }
 
 if (require.main === module)
   main();
 
-module.exports = { argvForAiSession, envForAiSession, envForActiveProfile };
+module.exports = {
+  argvForAiSession,
+  envForAiSession,
+  envForActiveProfile,
+  retentionDays,
+  outputDirsToPrune,
+  pruneOutputDir,
+  schedulePrune,
+  GENERATED_OUTPUT_NAME,
+};
