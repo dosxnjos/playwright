@@ -80,7 +80,10 @@ class PlaywrightExtension {
         // seed (the connect page itself) is created by the agent and closed on disconnect.
         // Picking the connect page itself in the list is not a user tab: the agent created it.
         const seedOwner: TabOwner = message.tab && message.tab.id !== sender.tab!.id ? 'user' : 'agent';
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner).then(
+        // Fork (patch 7): a connect page opened in the background (a sub-agent's, through an already connected
+        // relay) with the token and no picked tab connects without taking the user's tab or window.
+        const silent = !message.tab && sender.tab?.active === false;
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, seedOwner, silent).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
@@ -105,7 +108,7 @@ class PlaywrightExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner, silent = false): Promise<void> {
     try {
       await this._cleanupPromise;
       this._releaseTab(selectorTabId);
@@ -126,10 +129,12 @@ class PlaywrightExtension {
       };
       this._connections.set(id, group);
 
-      await Promise.all([
-        chrome.tabs.update(tab.id, { active: true }),
-        chrome.windows.update(tab.windowId, { focused: true }),
-      ]).catch(() => {});
+      if (!silent) {
+        await Promise.all([
+          chrome.tabs.update(tab.id, { active: true }),
+          chrome.windows.update(tab.windowId, { focused: true }),
+        ]).catch(() => {});
+      }
 
       if (tab.id !== selectorTabId)
         await chrome.tabs.remove(selectorTabId).catch(() => {});

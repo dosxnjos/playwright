@@ -49,6 +49,13 @@ const ConnectApp: React.FC = () => {
   useEffect(() => {
     const runAsync = async () => {
       const params = new URLSearchParams(window.location.search);
+      // Fork: the token leaves this tab's URL before anything connects. With the token the connect page becomes the
+      // agent's first tab, so its URL would show up in tool responses ("Page URL"). `params` keeps it for the check below.
+      if (params.has('token')) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('token');
+        history.replaceState(history.state, '', url);
+      }
       const relayUrl = params.get('mcpRelayUrl');
 
       if (!relayUrl) {

@@ -36,6 +36,9 @@ export { allSkills, installSkills } from './utils/installSkills';
 export { openDashboardApp, openDashboardForContext } from './dashboard/dashboardApp';
 // Fork-only (patch 6): exported for tests/mcp/agent-routing.spec.ts.
 export { withAgentRouting } from './mcp/agentRouter';
+// Fork-only (patch 7): exported for tests/mcp/agent-silent.spec.ts.
+export { CDPRelayServer } from './mcp/cdpRelay';
+export { relayScope } from './backend/extensionSession';
 
 export type { ContextConfig } from './backend/context';
 export type { CallToolRequest, CallToolResult, Tool } from './backend/tool';

@@ -21,7 +21,7 @@ import { defaultUserDataDirForChannel } from '@utils/chromiumChannels';
 import { playwright } from '../../inprocess';
 import { findPlaywrightExtensionProfile, isExtensionInstalledInProfile, playwrightExtensionInstallUrl } from '../utils/extension';
 import { CDPRelayServer } from './cdpRelay';
-import { registerExtensionRelay } from '../backend/extensionSession';
+import { registerExtensionRelay, relayScope } from '../backend/extensionSession';
 
 import type * as playwrightTypes from '../../..';
 
@@ -35,7 +35,8 @@ export async function createExtensionBrowser(channel: string, executablePath: st
   if (userDataDir && !executablePath && (!profileDirectory || !await isExtensionInstalledInProfile(path.join(userDataDir, profileDirectory))))
     throw new Error(`Playwright Extension not found in "${profileDirectory ? path.join(userDataDir, profileDirectory) : userDataDir}". Install it from ${playwrightExtensionInstallUrl}, or set the PLAYWRIGHT_MCP_EXECUTABLE_PATH environment variable to use a browser at a custom location.`);
 
-  const relay = new CDPRelayServer(channel, executablePath, customUserDataDir, profileDirectory);
+  // Fork (patch 7): set by the agent router for a sub-agent's backend.
+  const relay = new CDPRelayServer(channel, executablePath, customUserDataDir, profileDirectory, { background: relayScope.getStore()?.background ?? false });
   await relay.start();
   debugLogger(`CDP relay server started, extension endpoint: ${relay.extensionEndpoint()}.`);
 

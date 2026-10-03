@@ -19,6 +19,8 @@
 // routed cases run with --isolated. See FORK.md § Agent routing.
 
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
 
 import { test, expect, parseResponse } from './fixtures';
 import { tools } from '../../packages/playwright-core/lib/coreBundle';
@@ -203,4 +205,90 @@ test('browser_close drops the caller even when its backend never reports disconn
   } finally {
     await router.dispose?.();
   }
+});
+
+// Phase 3: a SubagentStop hook drops an empty marker <release dir>/<sessao>/<agente>; the router disposes that agent.
+const inSession = (client: Client, agente: string, sessao: string, name: string, args: Args = {}) =>
+  client.callTool({ name, arguments: { ...args, _meta: { agente, sessao } } });
+
+test('a release marker disposes the ended agent, main stays', async ({ startClient, server }, testInfo) => {
+  const rel = testInfo.outputPath('rel');
+  const { client } = await startClient({ args: ['--isolated'], env: { PLAYWRIGHT_MCP_AGENT_RELEASE_DIR: rel } });
+  await inSession(client, 'main', 's1', 'browser_navigate', { url: server.HELLO_WORLD + '#main' });
+  await inSession(client, 'a1', 's1', 'browser_navigate', { url: server.HELLO_WORLD + '#a1' });
+  // The folder means "this session uses the browser": the hook only writes markers into an existing one.
+  expect(fs.existsSync(path.join(rel, 's1'))).toBe(true);
+  expect(await contextCount(client)).toBe(2);
+
+  // An agent that ends with a call in flight (Esc) keeps its browser until the call returns.
+  const long = inSession(client, 'a1', 's1', 'browser_run_code_unsafe', { code: 'async page => { await page.waitForTimeout(2000); return page.url(); }' });
+  await new Promise(f => setTimeout(f, 200));
+  fs.writeFileSync(path.join(rel, 's1', 'a1'), '');
+  // main's call sweeps on arrival: the marker must survive it while a1 is busy.
+  expect(await contextCount(client)).toBe(2);
+  expect(fs.existsSync(path.join(rel, 's1', 'a1'))).toBe(true);
+  const longResult = await long;
+  expect(longResult.isError).toBeFalsy();
+  expect(parseResponse(longResult as any)?.result).toContain('#a1');
+
+  // No server call while waiting: only the periodic sweep can consume the marker.
+  await expect.poll(() => fs.existsSync(path.join(rel, 's1', 'a1')), { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => contextCount(client), { timeout: 10_000 }).toBe(1);
+  expect(await pageUrl(client, 'main')).toBe(server.HELLO_WORLD + '#main');
+  expect(await tabs(client, 'a1')).not.toContain(server.PREFIX);
+
+  // Session end removes the session folder, so a late marker has nowhere to land.
+  await client.close();
+  await expect.poll(() => fs.existsSync(path.join(rel, 's1')), { timeout: 10_000 }).toBe(false);
+});
+
+test('an agent that calls again after its marker keeps its browser (resumed agent)', async ({ startClient, server }, testInfo) => {
+  const rel = testInfo.outputPath('rel');
+  const { client } = await startClient({ args: ['--isolated'], env: { PLAYWRIGHT_MCP_AGENT_RELEASE_DIR: rel } });
+  await inSession(client, 'main', 's1', 'browser_navigate', { url: server.HELLO_WORLD + '#main' });
+  await inSession(client, 'a1', 's1', 'browser_navigate', { url: server.HELLO_WORLD + '#a1' });
+  // Wait for a periodic sweep (a probe marker vanishes with no call in between): the next one is ~5 s away.
+  const periodicSweep = async (probe: string) => {
+    fs.writeFileSync(path.join(rel, 's1', probe), '');
+    await expect.poll(() => fs.existsSync(path.join(rel, 's1', probe)), { timeout: 10_000 }).toBe(false);
+  };
+  await periodicSweep('probe1');
+
+  // SubagentStop fired, then the agent was resumed and calls before the next periodic sweep: the call consumes its
+  // own marker (it is alive, the marker is stale) and keeps the agent's state.
+  fs.writeFileSync(path.join(rel, 's1', 'a1'), '');
+  const listed = await inSession(client, 'a1', 's1', 'browser_tabs', { action: 'list' });
+  expect(listed.isError).toBeFalsy();
+  expect(parseResponse(listed as any)?.result).toContain('#a1');
+  expect(fs.existsSync(path.join(rel, 's1', 'a1'))).toBe(false);
+
+  // The periodic sweep that follows has nothing left to release.
+  await periodicSweep('probe2');
+  expect(await contextCount(client)).toBe(2);
+  expect(await tabs(client, 'a1')).toContain('#a1');
+});
+
+test('a marker of an unknown agent or of main is only deleted', async ({ startClient, server }, testInfo) => {
+  const rel = testInfo.outputPath('rel');
+  const { client, stderr } = await startClient({ args: ['--isolated'], env: { PLAYWRIGHT_MCP_AGENT_RELEASE_DIR: rel, DEBUG: 'pw:mcp:router' } });
+  await inSession(client, 'main', 's1', 'browser_navigate', { url: server.HELLO_WORLD + '#main' });
+
+  fs.writeFileSync(path.join(rel, 's1', 'ghost'), '');
+  fs.writeFileSync(path.join(rel, 's1', 'main'), '');
+  await expect.poll(() => fs.readdirSync(path.join(rel, 's1')), { timeout: 10_000 }).toEqual([]);
+
+  // Releasing a key nobody holds never opens a browser for it; main is never released (it would come back blank).
+  expect(stderr()).not.toContain('create key=ghost');
+  expect(await contextCount(client)).toBe(1);
+  expect(await pageUrl(client, 'main')).toBe(server.HELLO_WORLD + '#main');
+});
+
+test('a call without a valid sessao creates no release folder', async ({ startClient, server }, testInfo) => {
+  const rel = testInfo.outputPath('rel');
+  const { client } = await startClient({ args: ['--isolated'], env: { PLAYWRIGHT_MCP_AGENT_RELEASE_DIR: rel } });
+  await as(client, 'a1', 'browser_navigate', { url: server.HELLO_WORLD + '#a1' });
+  await inSession(client, 'a1', '../evil', 'browser_navigate', { url: server.HELLO_WORLD + '#a1-2' });
+  expect(await tabs(client, 'a1')).toContain('#a1-2');
+  expect(fs.existsSync(rel)).toBe(false);
+  expect(fs.existsSync(testInfo.outputPath('evil'))).toBe(false);
 });

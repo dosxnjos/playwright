@@ -14,8 +14,9 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 | 1 | `scripts/run-mcp-server.cjs` wrapper, CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.gitignore`, `.github/workflows/` | ours |
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
-| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.1` | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
-| 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
+| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.2` since patch 7) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
+| 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off; an ended agent's backend is released by a SubagentStop marker file | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
+| 7 | silent connect: a relay already connected opens the next connect page from inside Chrome; a sub-agent connects, opens tabs and `select`s in the background; the connect page drops the token from its own URL | `mcp/cdpRelay.ts`, `mcp/extensionContextFactory.ts:38`, `backend/extensionSession.ts` (`relayScope`), `mcp/agentRouter.ts` (`_entryFor`), `tools/index.ts` (exports for the spec), `extension/src/background.ts` (`silent`), `extension/src/ui/connect.tsx` (token), `extension/manifest.json` (`0.4.0.2`), `tests/mcp/agent-silent.spec.ts`. Manual Chrome check: pending (roadmap 4.0/4.5) | ours |
 
 Tab ownership: a tab is **agent-owned** (closed on disconnect) if the agent created it: the token-bypass seed, a
 popup, `browser_tabs new`, `Target.createTarget`. It is **user-owned** (only ungrouped) if the user picked it in the
@@ -49,7 +50,8 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
     today's behavior, so without the hook the router is inert.
   - `agenteTipo`: only names the group: `gp` (general-purpose), `wf` (workflow-subagent), else the type itself.
     Group title of an agent: `<main's label, or the client name> · <type>-<last 4 chars of the key>`.
-  - `sessao`: the session id; read from Phase 3 on (release markers), ignored for now.
+  - `sessao`: the session id; names the release-marker folder (below). Missing or not matching the same regex ->
+    no folder, no markers read.
   - The zod schemas drop `_meta`, so tools never see it; page WebMCP tools get it stripped too (`browserBackend.ts`).
 - **When it is on:** `--extension` (each agent gets its own relay, connection and tab group) and `--isolated` (each
   agent gets its own context on the shared browser). **Off** in the persistent mode (a second backend fails with
@@ -61,25 +63,90 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
 - **Lifecycle:** a non-`main` agent's backend is disposed after `PLAYWRIGHT_MCP_AGENT_IDLE_MS` (default 30 min)
   without calls, never with a call in flight; `main` never expires. A backend's `disconnected` only drops that key:
   the router never re-emits it (the server would dispose every agent, main included). Everything goes on session end.
-- **Log:** `DEBUG=pw:mcp:router` prints `create key=… clientName=…` and `drop key=…`; past 8 live agents one stderr
-  warning (tab group colors repeat from the 9th), no cap.
+- **Release marker (agent ended).** On the first call carrying a valid `sessao`, the router creates
+  `<PLAYWRIGHT_MCP_AGENT_RELEASE_DIR or ~/.playwright-mcp/agentes-fim>/<sessao>/`; the folder means "this session
+  uses the browser". A SubagentStop hook (`playwright-agente.cjs fim`, roadmap 3.3; until that entry is in
+  `~/.claude/settings.json` only the idle timeout releases) writes an empty file named after the ended `agent_id`
+  there, only if the folder exists, so a server without the router (npx fallback) never reacts.
+  The router sweeps every 5 s and at the start of every call (before picking the caller's backend): it deletes each
+  marker and disposes that agent's backend (in extension mode its tab group closes). A marker of an unknown key is
+  only deleted (no browser is ever created for it), `main`'s is ignored, and an agent with a call in flight keeps its
+  marker until the next sweep. The caller's own marker is only deleted: an agent that calls is alive (resumed with
+  SendMessage after its SubagentStop, or kept going by another SubagentStop hook), so it keeps its browser; resumed
+  after a periodic sweep already ran, it starts on a fresh one. Session end clears the timer and removes the session folder; a folder that vanished
+  while the server lives (an older server of the same session disposed) is recreated on the next sweep.
+- **Log:** `DEBUG=pw:mcp:router` prints `create key=… clientName=…`, `release key=… known=…`, `stale marker key=… (caller)` and `drop key=…`;
+  past 8 live agents one stderr warning (tab group colors repeat from the 9th), no cap.
 - **Limitations:**
   - an unhandled rejection in one agent's page shows up in the next response of every agent (each Context hooks
     `process.on`; same as the HTTP mode);
   - `--isolated`: agents share no cookies or storage (one context each);
   - `tools/list` only lists the main agent's page WebMCP tools (a sub-agent can still call its own page's tool);
-  - in extension mode, closing an agent's last tab closes its connection: the next call reconnects and the Chrome
-    window takes focus again (navigate in the last tab instead of closing it).
+  - in extension mode, closing an agent's last tab closes its connection: the next call reconnects (navigate in the
+    last tab instead of closing it); with patch 7 a sub-agent reconnects in the background, the main agent with focus;
+  - a server process killed without dispose leaves its empty session folder behind (harmless, nothing reads it);
+  - release markers only cover agents whose SubagentStop fires (normal end of an Agent tool or Workflow agent,
+    measured; Esc or crash not measured): the idle timeout stays the safety net.
 - **`browser_close` text** promises that other agents keep their tabs. That is only true with the hook installed;
   with routing off (`ia:*`, persistent) the backend is shared and the close takes everyone's tabs. The old patch 5
   (tool texts warning that the current tab is shared) was dropped after the live gate (roadmap 2.3, 03/10/2026):
   `backend/{tabs,navigate}.ts` are upstream's again.
 - **Tests:** `tests/mcp/agent-routing.spec.ts` covers `--isolated` (including idle dispose measured by context count
   and no idle with a call in flight) plus a fake-backend case for the drop-by-name on `browser_close` (the path
-  extension mode needs when `disconnected` does not follow; in `--isolated` `disconnected` always comes first).
+  extension mode needs when `disconnected` does not follow; in `--isolated` `disconnected` always comes first), and
+  the release markers (periodic sweep disposes the agent, unknown/`main` markers only deleted, the caller's own marker
+  consumed by its call without losing its state, no folder without a valid `sessao`, folder removed on session end),
+  with `PLAYWRIGHT_MCP_AGENT_RELEASE_DIR` under the test output.
   Extension mode was checked by hand on 03/10/2026 (roadmap 1.7 and 2.3: one group per agent, scoped close and label).
 - **Another machine:** copy the hook from `C:\Dev\cerebro\harness-espelho\` to `~/.claude/hooks/` and add the
   PreToolUse entry of roadmap 2.2 to `~/.claude/settings.json`; without it the agents of a session share one tab again.
+
+## Silent connect (patch 7)
+
+Without it every agent's first browser call launches `chrome.exe` with a connect page, and the extension focuses the
+page and its window: one stolen window per sub-agent.
+
+- **Carrier.** `mcp/cdpRelay.ts` keeps a process-wide set of relays whose extension is connected. A relay that needs
+  its connect page asks one of them to `chrome.tabs.create` it (already allow-listed in the extension, no new
+  command); the `pw:mcp:relay` log says `Connect page opened via portador`. A relay counts as a carrier only after its
+  extension handshake (`extension.initialized`). A closed carrier or an error: the next carrier. With a token, one
+  deadline (10 s, `PWTEST_EXTENSION_CARRIER_TIMEOUT` in tests) runs from the carrier's `chrome.tabs.create` to the
+  connect page's WebSocket; past it the page is closed (`chrome.tabs.remove` through the same carrier, also when the
+  create answers late) and the old `chrome.exe` launch takes over, so a background page that never connects, or an
+  "Invalid token" error page, ends up as a foreground page instead of a hidden leftover. The carrier's own profile is
+  used, so `--profile-dir-name` does not matter on that path.
+- **First connections at the same time.** With a token and no carrier yet, a relay waits (up to the 30 s connect
+  timeout) for a relay that started connecting before it, then uses it as carrier: only the oldest launches
+  `chrome.exe`. Never on younger ones (no deadlock), never without a token (that relay waits for a click).
+- **Background relay.** The router creates every agent but `main` inside `relayScope.run({ background: true })`
+  (`backend/extensionSession.ts`, an `AsyncLocalStorage`); `extensionContextFactory.ts` hands it to the relay
+  (`Relay created, background=…` in the log). A background relay opens its connect page with `active:false` (only with
+  a token: without one the page stays in front, the user has to click Allow), opens its tabs (`browser_tabs new`) with
+  `active:false`, and answers `Page.bringToFront` itself, so `browser_tabs select` of a sub-agent never changes the
+  tab you are looking at. The main agent keeps today's behavior.
+- **Focus emulation (background relay).** A background tab gets no `requestAnimationFrame`, and the `stable` check of
+  click, hover and check polls on it; `--extension` connects with `noDefaults`, which skips focus emulation
+  (`server/chromium/crPage.ts`). So right after each `chrome.debugger.attach` (seed, `browser_tabs new`, popups) a
+  background relay sends `Emulation.setFocusEmulationEnabled {enabled:true}` to that tab, before Playwright sees it.
+  The patch 7 review measured it outside the extension (plain CDP to real Chrome, background tab): with it the page is
+  `visible` and `page.click` works; with `noDefaults`, `Timeout 5000ms exceeded`. Through the extension: unmeasured
+  until roadmap 4.5 (a sub-agent's `browser_click` in a background tab).
+- **Extension.** `background.ts`: a token connection (no picked tab) whose connect page is not the active tab skips
+  the `tabs.update(active)` + `windows.update(focused)`. An older extension still connects, only with focus.
+  `ui/connect.tsx` removes `token` from its own URL (`history.replaceState`) before anything connects: with the
+  token the connect page becomes the agent's first tab, and its URL used to come back in tool responses (`Page URL`).
+- **Not covered:** a popup a sub-agent's page opens (`window.open`, `target=_blank`) is created by Chrome, not by the
+  relay, so it may still come to the front. With `--extension --isolated` all agents share one relay, and the agent
+  that created it decides `background` for everyone (read from the code, untested; not a configuration used here).
+  A sub-agent has no way to bring its tab to the front (`browser_tabs select` and `page.bringToFront()` are answered
+  locally): focus emulation is what keeps its background tab usable; if a click still times out there, the way out is
+  `PLAYWRIGHT_MCP_AGENT_SILENT=off` and a server restart.
+- **Kill switch:** `PLAYWRIGHT_MCP_AGENT_SILENT=off` (server env) turns off the carrier and the background relay; the
+  extension side then never sees a background connect page, so it focuses as before.
+- **Tests:** `tests/mcp/agent-silent.spec.ts` drives `CDPRelayServer` with a fake extension and a fake CDP client
+  (carrier, `active` with and without token, dead carrier skipped, kill switch, background tabs and `bringToFront`,
+  focus emulation, carrier page that never connects / answers late / fails, simultaneous first connections, router
+  scope; the `chrome.exe` launch is stubbed through `child_process.spawn`). Real Chrome: roadmap 4.0/4.5, by hand after the extension "Reload".
 
 ## Known limitations
 
@@ -142,8 +209,12 @@ Likely conflicts: `backend/tools.ts` (keep both tool lists), `tests/mcp/capabili
 `browser_set_group_label` in the list), `.github/workflows/*` (modify/delete: `git rm` again; also drop any new
 workflow with an automatic trigger, e.g. `check_copilot_models.yml` on 01/10/2026), `ui/connect.css`,
 `mcp/program.ts:189` (keep `withAgentRouting(factory, config)` around whatever upstream passes to `start`),
-`backend/common.ts:27` (keep the fork's `browser_close` text), `tools/index.ts` (keep the `withAgentRouting` export).
-Then check: `npm run ctest-mcp -- group-label capabilities tabs core agent-routing`, plus from `packages/extension/`
+`backend/common.ts:27` (keep the fork's `browser_close` text), `tools/index.ts` (keep the fork's exports),
+`mcp/cdpRelay.ts` (patch 7: carrier set, `background` constructor option, the early return in
+`_openConnectPageInBrowser`, `active:false` in `sendCommand`, the `Page.bringToFront` case),
+`mcp/extensionContextFactory.ts:38` (pass `relayScope`'s `background`), `extension/src/background.ts` (`silent`
+around the focus calls in `_connectTab`), `extension/src/ui/connect.tsx` (token stripped right after `params`).
+Then check: `npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent`, plus from `packages/extension/`
 `npx tsc -p tsconfig.json --noEmit` and `npx tsc -p tsconfig.ui.json --noEmit`.
 
 ⚠️ `npm run flint` does **not** cover `packages/extension/` (its two tsconfigs are not in the root project): a real
@@ -207,6 +278,7 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
   "Invalid token provided.": `env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN npm run test-extension -- <filter>`.
 - Don't point `--output` at a Windows 8.3 short path (e.g. `C:/Users/GABRIE~1/...`, the session scratchpad):
   `core.spec.ts` "can navigate to file:// URLs" then fails with `Connection closed`, on upstream too. Default output is fine.
+  Seen again on 03/10/2026 with a long path (`<worktree>/temp/fase4-results`): same failure, passes with the default.
 - Never `taskkill /F /IM chrome.exe`: dozens of PIDs belong to one real window. Kill specific PIDs found by matching the
   command line against the test's `userDataDir`.
 - Server death is clean on Windows without a browser: `watchdog.ts` closes on `process.stdin` `close`.
