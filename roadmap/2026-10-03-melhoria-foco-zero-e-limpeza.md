@@ -140,4 +140,5 @@ continuou dali) + 2 revisores + corretor. Commit `ebb346b0f` (rebase: WIP `cf933
   atrás **1,0 s** (pisca visível ~1 s); totalmente coberto **0,4 s** (sem pisca visível; o Windows desenha a janela
   coberta); Chrome em foco **27,2 s**, sem piscar. Nenhum erro.
 - **Em aberto:** com o Chrome parcialmente visível o Gabriel vê o pisca (a extensão só sabe de foco, não de
-  visibilidade na tela). Pergunta feita a ele em 03/10.
+  visibilidade na tela). **Respondido em 03/10: fica assim** ("ta ótimo assim"); revelar só com o Chrome todo
+  coberto foi descartado (permissão nova na extensão, sem garantia).
