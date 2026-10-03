@@ -725,16 +725,24 @@ test('a window someone looks at does not hold the other captures back', async ()
   expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
 });
 
-test('a revealed capture that never answers holds the next reveal back only for a while', async () => {
+// Review of 03/10: when the hold runs out, A's tab is put back first and only then may B reveal; otherwise B records A's
+// agent tab as the one to put back (the extension's shared state covers it too, this keeps the order clean). The late
+// capture of A then ends without a second restore.
+test('a revealed capture that does not answer is put back when its hold runs out, before the next reveal', async () => {
   process.env.PWTEST_EXTENSION_REVEAL_HOLD_MS = '300';
   const timeline: string[] = [];
   const a = await capturingRelay(true, timeline, 'A ');
   const b = await capturingRelay(true, timeline, 'B ');
-  a.answer(CAPTURE, () => new Promise(() => {}));
-  void a.capture();
+  let lateCapture!: () => void;
+  a.answer(CAPTURE, () => new Promise(f => lateCapture = () => f({ result: PNG })));
+  const first = a.capture();
   await expect.poll(() => timeline).toContain(`A ${CAPTURE}`);
   expect((await b.capture()).result).toEqual(PNG);
-  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
+  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `A ${RESTORE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
+  lateCapture();
+  expect((await first).result).toEqual(PNG);
+  await new Promise(f => setTimeout(f, 100));
+  expect(timeline).toEqual([`A ${REVEAL}`, `A ${CAPTURE}`, `A ${RESTORE}`, `B ${REVEAL}`, `B ${CAPTURE}`, `B ${RESTORE}`]);
 });
 
 // Fork (03/10 live test, extension 0.4.0.4): a hidden tab's capture took ~12 s (sub-agent) and 28-31 s (main), at the

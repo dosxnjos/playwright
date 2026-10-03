@@ -177,7 +177,7 @@ test('nobody looks at the window: the agent tab is shown for the capture and the
 test('the user switched tabs during the capture: their choice stands, nothing is put back', async ({ pathToExtension, server }, testInfo) => {
   server.setContent('/other', '<title>other</title>', 'text/html');
   const context = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
-  const { page, user, agent, windowId } = await userAndAgent(context, server);
+  const { page, agent, windowId } = await userAndAgent(context, server);
   const other = await newTab(context, server.PREFIX + '/other', false);
   await setWindowFocused(context, windowId, false);
   const activations = await recordActivations(context, { whenActivated: agent, then: other.id });
@@ -216,4 +216,136 @@ test('reveal and restore guards: tabs of this connection only, a tab already in 
   await new Promise(f => setTimeout(f, 300));
   expect(await activations()).toEqual([agent]);
   expect(await activeTab(context, windowId)).toBe(agent);
+});
+
+// A sub-agent of the same session (its connect page through the main relay, the carrier); its tab lands in the same
+// window, never shown.
+async function subAgent(context: BrowserContext, server: { PREFIX: string, setContent: (path: string, content: string, mimeType: string) => void }) {
+  const relay = new tools.CDPRelayServer('chromium', process.execPath, undefined, undefined, { background: true });
+  relays.push(relay);
+  await relay.start();
+  await relay.establishExtensionConnection('main · sub');
+  const browser = await chromium.connectOverCDP(relay.cdpEndpoint());
+  browsers.push(browser);
+  await expect.poll(() => browser.contexts()[0].pages().length).toBe(1);
+  server.setContent('/sub', '<title>sub</title>', 'text/html');
+  await browser.contexts()[0].pages()[0].goto(server.PREFIX + '/sub');
+  const tab = await swEval(context, async (url: string) => {
+    const [tab] = await (globalThis as any).chrome.tabs.query({ url });
+    return tab.id as number;
+  }, server.PREFIX + '/sub');
+  return { relay, tab };
+}
+
+const sendTo = (relay: Relay) => (method: string, params: any[]) => (relay as any)._extensionConnection.send(method, params);
+
+// Review of 03/10: the relay's one-reveal-at-a-time queue lives in one server process, and two Claude Code sessions are
+// two processes sharing one extension. Their reveals cross in the same window: the second must not record the first
+// agent's tab as the one to put back. Driven by hand (both relays here share this process's queue).
+for (const order of ['first revealed, first restored', 'last revealed, first restored', 'last revealed, first restored, user back at Chrome'] as const) {
+  test(`two connections reveal in one window at once (${order}): the user's tab comes back`, async ({ pathToExtension, server }, testInfo) => {
+    const context = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+    const { relay, user, agent, windowId } = await userAndAgent(context, server);
+    const sub = await subAgent(context, server);
+    await expect.poll(() => activeTab(context, windowId)).toBe(user.id);
+    await setWindowFocused(context, windowId, false);
+    const main = sendTo(relay);
+    const other = sendTo(sub.relay);
+
+    expect(await main('extension.revealForCapture', [agent])).toEqual({ revealed: true });
+    // A connection never restores what another revealed.
+    expect(await other('extension.restoreAfterCapture', [agent])).toEqual({ restored: false });
+    expect(await activeTab(context, windowId)).toBe(agent);
+    expect(await other('extension.revealForCapture', [sub.tab])).toEqual({ revealed: true });
+    expect(await activeTab(context, windowId)).toBe(sub.tab);
+    if (order === 'first revealed, first restored') {
+      await main('extension.restoreAfterCapture', [agent]);
+      await other('extension.restoreAfterCapture', [sub.tab]);
+    } else if (order === 'last revealed, first restored') {
+      await other('extension.restoreAfterCapture', [sub.tab]);
+      // The main agent's capture still runs: its tab is shown again, not the user's yet.
+      expect(await activeTab(context, windowId)).toBe(agent);
+      await main('extension.restoreAfterCapture', [agent]);
+    } else {
+      // The user came back to Chrome: no other agent tab switches in under their eyes.
+      await setWindowFocused(context, windowId, true);
+      await other('extension.restoreAfterCapture', [sub.tab]);
+      expect(await activeTab(context, windowId)).toBe(sub.tab);
+      await main('extension.restoreAfterCapture', [agent]);
+    }
+    expect(await activeTab(context, windowId)).toBe(user.id);
+    // Never a window focus from the extension.
+    expect(await windowFocused(context, windowId)).toBe(order === 'last revealed, first restored, user back at Chrome');
+  });
+}
+
+// Both commands arrive together: each reads the active tab before writing what to put back, so they take turns.
+test('two reveals sent at the same instant: the user\'s tab comes back', async ({ pathToExtension, server }, testInfo) => {
+  const context = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { relay, user, agent, windowId } = await userAndAgent(context, server);
+  const sub = await subAgent(context, server);
+  await expect.poll(() => activeTab(context, windowId)).toBe(user.id);
+  await setWindowFocused(context, windowId, false);
+  const main = sendTo(relay);
+  const other = sendTo(sub.relay);
+  for (let round = 0; round < 5; ++round) {
+    expect(await Promise.all([main('extension.revealForCapture', [agent]), other('extension.revealForCapture', [sub.tab])])).toEqual([{ revealed: true }, { revealed: true }]);
+    await Promise.all([main('extension.restoreAfterCapture', [agent]), other('extension.restoreAfterCapture', [sub.tab])]);
+    expect(await activeTab(context, windowId)).toBe(user.id);
+  }
+  // One capture ends as the other starts, with Chrome slow to answer which tab is active (the answer is read when asked
+  // and arrives later): the reveal must not read the window before the restore is done with it.
+  await swEval(context, async () => {
+    const tabs = (globalThis as any).chrome.tabs;
+    const query = tabs.query.bind(tabs);
+    tabs.query = async (info: any) => {
+      const result = await query(info);
+      await new Promise(f => setTimeout(f, 300));
+      return result;
+    };
+  }, undefined);
+  expect(await main('extension.revealForCapture', [agent])).toEqual({ revealed: true });
+  await Promise.all([main('extension.restoreAfterCapture', [agent]), other('extension.revealForCapture', [sub.tab])]);
+  await other('extension.restoreAfterCapture', [sub.tab]);
+  expect(await activeTab(context, windowId)).toBe(user.id);
+});
+
+test('the user switched tabs between two crossing reveals: their new tab is the one put back', async ({ pathToExtension, server }, testInfo) => {
+  server.setContent('/other', '<title>other</title>', 'text/html');
+  const context = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { relay, agent, windowId } = await userAndAgent(context, server);
+  const sub = await subAgent(context, server);
+  const other = await newTab(context, server.PREFIX + '/other', false);
+  await setWindowFocused(context, windowId, false);
+  const main = sendTo(relay);
+
+  expect(await main('extension.revealForCapture', [agent])).toEqual({ revealed: true });
+  await swEval(context, async (tabId: number) => {
+    await (globalThis as any).chrome.tabs.update(tabId, { active: true });
+  }, other.id);
+  await setWindowFocused(context, windowId, false);
+  expect(await sendTo(sub.relay)('extension.revealForCapture', [sub.tab])).toEqual({ revealed: true });
+  await main('extension.restoreAfterCapture', [agent]);
+  await sendTo(sub.relay)('extension.restoreAfterCapture', [sub.tab]);
+  expect(await activeTab(context, windowId)).toBe(other.id);
+});
+
+// Review of 03/10: the server dies (session ended, process killed, socket dropped) during a revealed capture; the relay
+// never sends the restore. The extension puts the user's tab back itself before closing the agent's tabs.
+test('the relay goes away during a revealed capture: the user\'s tab comes back', async ({ pathToExtension, server }, testInfo) => {
+  server.setContent('/mine', '<title>mine</title>', 'text/html');
+  const context = await launchHeadless(pathToExtension, testInfo.outputPath('user-data-dir'));
+  const { relay, user: opener, agent, windowId } = await userAndAgent(context, server);
+  // The user moved on to another tab. Closing an active tab, Chrome shows its opener (the tab that was in front when the
+  // agent's connect page opened, measured 03/10), not the tab the user was on.
+  const user = await newTab(context, server.PREFIX + '/mine', true);
+  await setWindowFocused(context, windowId, false);
+  expect(await sendTo(relay)('extension.revealForCapture', [agent])).toEqual({ revealed: true });
+  expect(await activeTab(context, windowId)).toBe(agent);
+  expect(opener.id).not.toBe(user.id);
+  relay.stop();
+  await expect.poll(() => swEval(context, async (tabId: number) => {
+    return (await (globalThis as any).chrome.tabs.query({})).some((tab: { id: number }) => tab.id === tabId);
+  }, agent)).toBe(false);
+  expect(await activeTab(context, windowId)).toBe(user.id);
 });

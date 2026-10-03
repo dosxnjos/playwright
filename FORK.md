@@ -14,9 +14,9 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 | 1 | `scripts/run-mcp-server.cjs` wrapper, CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.gitignore`, `.github/workflows/` | ours |
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
-| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source, `0.4.0.4` since foco zero: `storage` permission) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
+| 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source, `0.4.0.4` since foco zero: `storage` permission, `0.4.0.5` since the reveal for capture) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
 | 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off; an ended agent's backend is released by a SubagentStop marker file | `mcp/agentRouter.ts`, `mcp/program.ts:189`, `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports `withAgentRouting` for the spec), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | ours; upstream declined a similar path (#39703, #42961) |
-| 7 | silent connect: a relay already connected opens the next connect page from inside Chrome; a sub-agent connects, opens tabs and `select`s in the background; the connect page drops the token from its own URL | `mcp/cdpRelay.ts`, `mcp/extensionContextFactory.ts:38`, `backend/extensionSession.ts` (`relayScope`), `mcp/agentRouter.ts` (`_entryFor`), `tools/index.ts` (exports for the spec), `extension/src/background.ts` (`silent`), `extension/src/ui/connect.tsx` (token), `extension/manifest.json` (`0.4.0.3`, `webNavigation`), `tests/mcp/agent-silent.spec.ts`; since the 03/10 live test also `mcp/browserModel.ts` (`onTabCreated` guard), `mcp/cdpRelayV2.ts` (`ownTabsOnly`, `onInitialized`), `backend/screenshot.ts` (`screenshotTimeout`, `screenshotTimeoutFor`, `pw:mcp:shot`), `extension/src/connectedTabGroup.ts` (agent tabs closed one by one; owner by an attached opener), `extension/src/relayConnection.ts` (popup source), `tests/extension/popup-source.spec.ts`. Live check 03/10: isolation, release and no stolen focus ok; a sub-agent's screenshot timed out 3/3 (30 s timeout since, re-check pending). **Foco zero** (03/10, roadmap `2026-10-03-melhoria-foco-zero-e-limpeza.md` phase 1): the main agent too, with a token, unless `PLAYWRIGHT_MCP_FOCUS=on`; the first connection puts back the user's tab; silent popups do not stay in front: `mcp/cdpRelay.ts` (`subAgent`, `silent=1`), `extension/src/focusMemory.ts`, `extension/src/background.ts` (`putBack`), `extension/src/relayConnection.ts` (`silent`), `extension/src/ui/connect.tsx` (`silent`), `tests/extension/focus-zero.spec.ts` | ours |
+| 7 | silent connect: a relay already connected opens the next connect page from inside Chrome; a sub-agent connects, opens tabs and `select`s in the background; the connect page drops the token from its own URL | `mcp/cdpRelay.ts`, `mcp/extensionContextFactory.ts:38`, `backend/extensionSession.ts` (`relayScope`), `mcp/agentRouter.ts` (`_entryFor`), `tools/index.ts` (exports for the spec), `extension/src/background.ts` (`silent`), `extension/src/ui/connect.tsx` (token), `extension/manifest.json` (`0.4.0.3`, `webNavigation`), `tests/mcp/agent-silent.spec.ts`; since the 03/10 live test also `mcp/browserModel.ts` (`onTabCreated` guard), `mcp/cdpRelayV2.ts` (`ownTabsOnly`, `onInitialized`), `backend/screenshot.ts` (`screenshotTimeout`, `screenshotTimeoutFor`, `pw:mcp:shot`), `extension/src/connectedTabGroup.ts` (agent tabs closed one by one; owner by an attached opener), `extension/src/relayConnection.ts` (popup source), `tests/extension/popup-source.spec.ts`. Live check 03/10: isolation, release and no stolen focus ok; a sub-agent's screenshot timed out 3/3 (re-checked 03/10: slow, not hung, ~12-31 s; see § Foco zero, "Screenshot: reveal for capture"). **Foco zero** (03/10, roadmap `2026-10-03-melhoria-foco-zero-e-limpeza.md` phase 1): the main agent too, with a token, unless `PLAYWRIGHT_MCP_FOCUS=on`; the first connection puts back the user's tab; silent popups do not stay in front: `mcp/cdpRelay.ts` (`subAgent`, `silent=1`), `extension/src/focusMemory.ts`, `extension/src/background.ts` (`putBack`), `extension/src/relayConnection.ts` (`silent`), `extension/src/ui/connect.tsx` (`silent`), `tests/extension/focus-zero.spec.ts`. **Reveal for capture** (03/10, after the live test: a hidden tab's screenshot took ~12-31 s): `mcp/cdpRelay.ts` (`_captureRevealed`), `mcp/protocol.ts` (`extension.revealForCapture`/`restoreAfterCapture`), `backend/screenshot.ts` (60 s), `extension/src/captureReveal.ts`, `extension/src/relayConnection.ts` (the two commands), `tests/extension/capture-reveal.spec.ts` | ours |
 
 Tab ownership: a tab is **agent-owned** (closed on disconnect) if the agent created it: the token-bypass seed, a
 popup, `browser_tabs new`, `Target.createTarget`. It is **user-owned** (only ungrouped) if the user picked it in the
@@ -116,7 +116,7 @@ the focus by default"): with a token, nothing the agents do takes the user's tab
 - **Who is in the background.** A sub-agent always (its connect page only with a token). The main agent when there is a
   token (`PLAYWRIGHT_MCP_EXTENSION_TOKEN`) and `PLAYWRIGHT_MCP_FOCUS` is not `on`: then it is a background relay too
   (connect page through a carrier with `active:false`, tabs with `active:false`, `Page.bringToFront` answered locally,
-  focus emulation, 30 s screenshot timeout), but **not** own-tabs-only: a tab dragged into the main agent's group is
+  focus emulation, 60 s screenshot timeout and the reveal for capture), but **not** own-tabs-only: a tab dragged into the main agent's group is
   still handed over. Without a token the main agent stays in front: the connect page needs a click on Allow.
   `pw:mcp:relay` log: `Relay created, background=… subAgent=…`.
 - **`PLAYWRIGHT_MCP_FOCUS=on`** (server env, then restart Claude Code) gives the main agent today's focus back:
@@ -201,14 +201,39 @@ the focus by default"): with a token, nothing the agents do takes the user's tab
 - **Screenshot timeout (background relay).** Defect 2 of the 03/10 live test: `browser_take_screenshot` of a
   sub-agent's tab (created with `active:false`, never shown, focus emulated) failed 3/3 with `Timeout 5000ms exceeded`
   after `fonts loaded`, i.e. in `Page.getLayoutMetrics`/`Page.captureScreenshot`, not in the font wait; the same capture
-  of a background tab passed before patch 7. `backend/screenshot.ts` gives it `max(action timeout, 30 s)`
+  of a background tab passed before patch 7. `backend/screenshot.ts` gives it `max(action timeout, 60 s)`
   (`screenshotTimeoutFor(tab)`: the relay registered for `tab.page.context().browser()`, its `background` getter,
   then `screenshotTimeout`); since foco zero that includes the main agent with a token (its tabs are never shown
   either); with `PLAYWRIGHT_MCP_FOCUS=on` it keeps the action timeout. `DEBUG=pw:mcp:shot` logs every capture: `screenshot <target> background=… timeout=… took Nms ok|failed`.
-  Unknown yet: whether 30 s is enough or the capture of a never-shown tab hangs; that is what the next live test measures,
-  for a sub-agent and, since foco zero, for the main agent with a token on a tab it never showed (before foco zero its
-  first tab was in front and captured at once). If it hangs, `PLAYWRIGHT_MCP_FOCUS=on` gives the main agent its fast
-  foreground capture back.
+  Measured in the 03/10 live test (extension `0.4.0.4`, 30 s then): it does not hang, it is slow, ~12 s for a
+  sub-agent and ~28-31 s for the main agent, at the ceiling. Chrome draws no frame for a hidden tab and
+  `Page.captureScreenshot` waits for one (the relay answers `Page.bringToFront` itself, so nothing shows the tab).
+- **Screenshot: reveal for capture (background relay, extension `0.4.0.5`).** Decided by the Gabriel on 03/10: "mostrar só sem
+  plateia" (show it only with no audience). `mcp/cdpRelay.ts` (`_captureRevealed`) wraps each `Page.captureScreenshot`
+  a background relay sends: first `extension.revealForCapture [tabId]`, then the capture, then
+  `extension.restoreAfterCapture [tabId]` in a `finally` (also when the capture fails). The extension
+  (`captureReveal.ts`, the commands in `relayConnection.ts`) reveals only a tab attached to that connection (else an
+  error), not already active, whose window is **not** the focused one (`chrome.windows.get(tab.windowId).focused`:
+  the user is in another app, nobody looks at it): `chrome.tabs.update(tabId, {active:true})` inside its own window,
+  never `chrome.windows.update({focused})`. The restore puts the window's previous active tab back only if the
+  revealed tab is still the active one (a user who switched tabs meanwhile keeps it) and only for a tab it revealed.
+  The window has the focus (the user is looking) -> nothing is revealed, the capture goes on slowly without flashing,
+  hence the 60 s ceiling. An extension older than `0.4.0.5` answers `Unknown method`: the relay logs it and captures
+  as before. Two agents capturing in one window would hide each other's tab, and a second reveal must not record the
+  first agent's tab as the one to put back. Three layers (review of 03/10): (1) in the server process, one reveal at a
+  time: a revealed capture holds the process's next background capture back until its restore, at most 15 s
+  (`PWTEST_EXTENSION_REVEAL_HOLD_MS` in tests); when the hold runs out the relay puts the tab back first and the capture
+  goes on unrevealed; unrevealed captures do not hold anyone. (2) In the extension, one `CaptureReveal` for every
+  connection (two Claude Code sessions are two processes sharing it), by window: a reveal into a window whose active tab
+  is already a revealed one keeps the user's tab as the one to put back; the user's tab comes back when the window's
+  last pending capture ends (an earlier restore shows a still-pending agent tab again, unless the window got the focus
+  meanwhile: no agent tab switches in while the user looks), only while a revealed tab is in
+  front, and a connection restores only what it revealed; reveals and restores take turns. (3) A connection that closes
+  with a pending reveal (server killed, socket dropped mid-capture) puts the user's tab back before its agent tabs
+  are closed (`relayConnection.ts` `_onClose`).
+  `pw:mcp:relay` log: `Capture of tab N: revealed=…`, `Capture without reveal: …`. Off the background relay
+  (`PLAYWRIGHT_MCP_FOCUS=on`, no token, `PLAYWRIGHT_MCP_AGENT_SILENT=off`) the capture goes straight to the extension
+  as upstream.
 - **Extension.** `background.ts`: a token connection (no picked tab) whose connect page is not the active tab, or that
   carries `silent=1`, skips the `tabs.update(active)` + `windows.update(focused)`. An older extension still connects,
   only with focus (it ignores `silent=1`); a `0.4.0.4` extension with an older server sees no `silent=1` and focuses
@@ -250,6 +275,26 @@ the focus by default"): with a token, nothing the agents do takes the user's tab
   (same harness, `npm run test-extension -- focus-zero`): the first connection puts back the user's tab, also after a
   service worker restart (`Target.closeTarget` on the worker); a user who clicked another tab meanwhile keeps it;
   `PLAYWRIGHT_MCP_FOCUS=on` leaves the connect page in front. Not covered: the window focus (headless has none).
+  Reveal for capture adds to `agent-silent.spec.ts` (fake extension): reveal, capture, restore in that order for a
+  sub-agent and for the main agent with a token, and only around `Page.captureScreenshot`; not revealed -> no restore;
+  a failed capture still restores and its error reaches Playwright; an old extension (`Unknown method`) and a failed
+  restore do not fail the capture; `PLAYWRIGHT_MCP_FOCUS=on`, no token and `PLAYWRIGHT_MCP_AGENT_SILENT=off` send no
+  reveal; two relays capturing at once reveal one at a time, an unrevealed capture holds nobody, a capture still
+  running when `PWTEST_EXTENSION_REVEAL_HOLD_MS` runs out is put back before the next reveal and not put back twice
+  when it ends; 60 s ceiling. `tests/extension/capture-reveal.spec.ts`
+  (real extension, headless, `npm run test-extension -- capture-reveal`): window without focus -> the agent tab is
+  shown and the user's comes back, the window never gets focused; the user switched tabs during the capture -> their
+  tab stays; window with focus -> nothing activates; reveal of a tab not attached to the connection is an error, an
+  already active tab is not revealed, a restore without a reveal does nothing; two connections (main agent and
+  sub-agent, driven by hand as two processes would be) reveal in one window at once, restored in either order -> the
+  user's tab comes back, a connection cannot restore the other's tab, the still-pending agent tab is shown again in
+  between (not when the window got the focus in between); reveals sent at the same instant, and a restore crossing a reveal with Chrome slow to answer
+  (`chrome.tabs.query` delayed in the worker) -> the user's tab; the user switched tabs between two crossing reveals ->
+  their new tab comes back; the relay stops during a revealed capture -> the user's tab, not the opener Chrome would
+  pick, is in front when the agent tab closes. Headless does keep a per-window
+  `focused` flag that `chrome.windows.update(id, {focused:false})` moves (measured 03/10), which stands for "the user
+  is in another app"; the OS focus itself and the slow capture are not reproduced (headless captures a hidden tab at
+  once). Each guard has a mutant that turns one of these tests red (03/10).
 
 ## Known limitations
 
@@ -257,9 +302,17 @@ the focus by default"): with a token, nothing the agents do takes the user's tab
   `Browser` object, so the registry lookup misses.
 - A tab dragged by hand into a sub-agent's tab group is not attached (patch 7, own tabs only): give the main agent the
   tab instead, or set `PLAYWRIGHT_MCP_AGENT_SILENT=off` and restart the server.
-- A sub-agent's screenshot, and since foco zero the main agent's with a token, may take up to 30 s before failing
-  (patch 7, screenshot timeout), instead of 5 s. Whoever needs the main agent's prints to be fast and sure (until the
-  live test measures the never-shown capture): `PLAYWRIGHT_MCP_FOCUS=on` and restart Claude Code.
+- A sub-agent's screenshot, and since foco zero the main agent's with a token, is slow while you look at the Chrome
+  window (no reveal, ~12-31 s measured on 03/10) and fails only after 60 s instead of 5 s. While you are in another
+  app, the agent's tab shows in its window for the capture (about a second, seen if you glance at Chrome then) and
+  your tab comes back. ⚠️ Unmeasured in real Chrome: whether a revealed tab paints when its window is fully covered
+  by another app (Windows occlusion tracking may still skip the frame); check `pw:mcp:shot ... took Nms` next to
+  `Capture of tab N: revealed=true` with Chrome partly visible and fully covered. With an extension older than
+  `0.4.0.5` it is always the slow capture: Reload it. Fast and
+  sure prints of the main agent: `PLAYWRIGHT_MCP_FOCUS=on` and restart Claude Code. Two side effects of a reveal,
+  read from the code and untested: `focusMemory.ts` records it as two tab switches (a connect page created inside
+  that second would put back the agent tab instead of yours), and a popup the agent's page opens during it has the
+  agent tab as both source and active tab, so it is not put back.
 - With an extension older than `0.4.0.3` (no `webNavigation`) a sub-agent's popup is never attached to it (patch 7,
   "Popups"), and older than `0.4.0.4` it comes to the front and the first connection keeps the connect page in front
   (foco zero): Reload the unpacked extension. Even on `0.4.0.4` a silent popup may flash before the previous tab comes
@@ -328,18 +381,21 @@ workflow with an automatic trigger, e.g. `check_copilot_models.yml` on 01/10/202
 `mcp/program.ts:189` (keep `withAgentRouting(factory, config)` around whatever upstream passes to `start`),
 `backend/common.ts:27` (keep the fork's `browser_close` text), `tools/index.ts` (keep the fork's exports),
 `mcp/cdpRelay.ts` (patch 7: carrier set, `background` constructor option, the early return in
-`_openConnectPageInBrowser`, `active:false` in `sendCommand`, the `Page.bringToFront` case),
+`_openConnectPageInBrowser`, `active:false` in `sendCommand`, the `Page.bringToFront` case, the
+`Page.captureScreenshot` case and `_captureRevealed` with its `revealQueue`), `mcp/protocol.ts` (the two
+`extension.*Capture` commands in `ExtensionCommandV2`),
 `mcp/extensionContextFactory.ts:38` (pass `relayScope`'s `background`), `extension/src/background.ts` (`silent`
 around the focus calls in `_connectTab`), `extension/src/ui/connect.tsx` (token stripped right after `params`),
 `mcp/browserModel.ts` (`ownTabsOnly` option, `onInitialized`, the guard at the top of `onTabCreated`),
 `mcp/cdpRelayV2.ts` (constructor `options`, `onInitialized()` in the `extension.initialized` case),
 `backend/screenshot.ts` (`screenshotTimeoutFor(tab)` instead of the `actionTimeoutOptions` spread, the `try/finally`
-with `pw:mcp:shot` around the capture), `backend/extensionSession.ts` (`background` in `ExtensionSessionRelay`),
+with `pw:mcp:shot` around the capture, `backgroundScreenshotTimeout` = 60 s), `backend/extensionSession.ts` (`background` in `ExtensionSessionRelay`),
 `extension/src/connectedTabGroup.ts` (`Promise.allSettled` in `_onConnectionClose`, `attachedTabs` in
 `_onTabGroupChanged`'s `fromGroupTab`), `extension/src/relayConnection.ts` (`popupSourceEvents`, `_onPopupCreated`,
-the early return in the `chrome.tabs.onCreated` case), `extension/manifest.json` (`webNavigation`).
+the early return in the `chrome.tabs.onCreated` case, the `extension.revealForCapture`/`restoreAfterCapture` case in
+`_handleCommand`, the `captureReveal.hasPending` branch in `_onClose` with `_detachAllAndNotifyClose`), `extension/manifest.json` (`webNavigation`).
 Then check: `npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent screenshot`,
-`npm run test-extension -- popup-source` (headless, runs on Windows), plus from `packages/extension/`
+`npm run test-extension -- popup-source focus-zero capture-reveal` (headless, runs on Windows), plus from `packages/extension/`
 `npx tsc -p tsconfig.json --noEmit` and `npx tsc -p tsconfig.ui.json --noEmit`.
 
 ⚠️ `npm run flint` does **not** cover `packages/extension/` (its two tsconfigs are not in the root project): a real
@@ -409,7 +465,8 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
   ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (**disabled manually in the repo's Actions tab as of 29/09/2026**:
   enable it there to use it; push to `main`
   with paths under `packages/extension/`, `tests/extension/` or `tools/`; free on a public repo) and a live check. `tests/mcp/` runs fine locally (`npm run ctest-mcp`).
-  Exception: `tests/extension/popup-source.spec.ts` connects real relays in-process to the extension in headless
+  Exception: `tests/extension/popup-source.spec.ts` (and `focus-zero.spec.ts`, `capture-reveal.spec.ts`, same
+  harness) connects real relays in-process to the extension in headless
   Chromium (no singleton, no click), so it runs locally; it stubs `child_process.spawn` only for the relay's launch
   (its `executablePath` is node), since the same process launches Chromium.
 - ⚠️ **Unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` (and `PLAYWRIGHT_MCP_EXTENSION`) before running extension tests.** If the

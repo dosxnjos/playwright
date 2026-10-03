@@ -338,13 +338,20 @@ export class CDPRelayServer {
     debugLogger(`Capture of tab ${tabId}: revealed=${revealed}`);
     if (!revealed)
       release();
-    const hold = revealed ? setTimeout(release, revealHoldMs()) : undefined;
+    let restoring: Promise<void> | undefined;
+    const restore = () => restoring ??= connection.send('extension.restoreAfterCapture', [tabId]).then(() => {}, error => debugLogger('Could not put the tab back after the capture:', error?.message));
+    // Review of 03/10: a capture still running when the hold runs out has its tab put back before the next reveal, which
+    // would otherwise record this agent's tab as the one to put back. The capture goes on without the reveal.
+    const hold = revealed ? setTimeout(() => {
+      debugLogger(`Capture of tab ${tabId} still running after ${revealHoldMs()} ms: putting the tab back`);
+      void restore().then(release);
+    }, revealHoldMs()) : undefined;
     try {
       return await connection.send('chrome.debugger.sendCommand', params);
     } finally {
       if (revealed) {
         clearTimeout(hold);
-        await connection.send('extension.restoreAfterCapture', [tabId]).catch(error => debugLogger('Could not put the tab back after the capture:', error?.message));
+        await restore();
         release();
       }
     }

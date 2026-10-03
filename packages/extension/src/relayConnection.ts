@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { CaptureReveal } from './captureReveal';
+import { captureReveal } from './captureReveal';
 
 export function debugLog(...args: unknown[]): void {
   const enabled = true;
@@ -78,8 +78,6 @@ export class RelayConnection {
   private _closed = false;
   private _pendingReattach = new Set<number>();
   private _recentReattach = new Set<number>();
-  // Fork (0.4.0.5): tabs shown for a capture, and the tab to put back (captureReveal.ts).
-  private _captureReveal = new CaptureReveal();
 
   onclose?: () => void;
   ontabattached?: (tabId: number) => void;
@@ -201,6 +199,16 @@ export class RelayConnection {
     for (const l of this._eventListeners)
       l.remove();
     this._eventListeners = [];
+    // Fork (0.4.0.5, review of 03/10): the relay went away during a revealed capture and will never send the restore.
+    // Put the user's tab back first: onclose closes the agent's tabs, and Chrome would show a neighbour instead.
+    if (captureReveal.hasPending(this)) {
+      void captureReveal.restoreAll(this).then(() => this._detachAllAndNotifyClose());
+      return;
+    }
+    this._detachAllAndNotifyClose();
+  }
+
+  private _detachAllAndNotifyClose() {
     for (const tabId of [...this._attachedTabs]) {
       detachDebugger(tabId);
       this._notifyTabDetached(tabId);
@@ -335,8 +343,11 @@ export class RelayConnection {
     if (message.method === 'extension.revealForCapture' || message.method === 'extension.restoreAfterCapture') {
       const tabId = (message.params as number[])[0];
       if (message.method === 'extension.restoreAfterCapture')
-        return await this._captureReveal.restore(tabId);
-      const result = await this._captureReveal.reveal(tabId);
+        return await captureReveal.restore(tabId, this);
+      // Only a tab this connection drives: a relay never shows the user's tabs or another agent's.
+      if (!this._attachedTabs.has(tabId))
+        throw new Error(`Tab ${tabId} is not attached to this connection`);
+      const result = await captureReveal.reveal(tabId, this);
       debugLog(`Capture of tab ${tabId}: revealed=${result.revealed}`);
       return result;
     }
