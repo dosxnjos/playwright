@@ -119,3 +119,25 @@ Workflow `foco-zero-e-limpeza` (2 executores em paralelo, 3 revisores de context
     em foco, print lento sem piscar e teto de 60 s. Em execução (Fase 3).
   - Leitura certa do achado 3 do teste: a URL da conexão vem sem token porque a página o apaga (4.7 do roadmap
     anterior); `silent=1` é esperado.
+
+## Relatório de execução — Fase 3: print "sem plateia" (03/10/2026, sessão 9f526eb4)
+
+Decisão do Gabriel (03/10): com o Chrome sem foco, revelar a aba do agente ~1 s para o print e devolver; com o
+Chrome em foco, print lento sem piscar, teto de 60 s. Workflow `print-sem-plateia` (executor morreu às 15:16 com
+"Login expired" depois da troca de senha do Google; o parcial foi guardado no WIP `8a3119334` e um 2º executor
+continuou dali) + 2 revisores + corretor. Commit `ebb346b0f` (rebase: WIP `cf933602e`).
+
+- **Como funciona:** o relay em 2º plano intercepta `Page.captureScreenshot` (`mcp/cdpRelay.ts`, `_captureRevealed`)
+  e pede à extensão `extension.revealForCapture`/`restoreAfterCapture` (`extension/src/captureReveal.ts`): revela só
+  se a janela não está em foco e a aba não é a ativa; devolve no `finally`, quando o hold de 15 s expira e quando a
+  conexão cai (`relayConnection.ts::_onClose`). Estado compartilhado por janela entre conexões (duas sessões
+  imprimindo ao mesmo tempo devolvem a aba do usuário). Extensão antiga cai no print lento sem erro. Extensão **0.4.0.5**.
+- **Provas:** `ctest-mcp -- agent-routing agent-silent screenshot tabs capabilities core` → `141 passed`;
+  `test-extension -- popup-source focus-zero capture-reveal` → `22 passed`; 13 mutantes mortos; tsc da extensão
+  na base (3 erros).
+- **Teste ao vivo:** o 1º (16:17) rodou com a extensão ainda em 0.4.0.4, então tudo caiu no caminho lento (13,6 /
+  30,1 / 11,1 s): é o fallback desenhado. O 2º, com 0.4.0.5 (16:29), medido pelo transcript: Chrome parcialmente
+  atrás **1,0 s** (pisca visível ~1 s); totalmente coberto **0,4 s** (sem pisca visível; o Windows desenha a janela
+  coberta); Chrome em foco **27,2 s**, sem piscar. Nenhum erro.
+- **Em aberto:** com o Chrome parcialmente visível o Gabriel vê o pisca (a extensão só sabe de foco, não de
+  visibilidade na tela). Pergunta feita a ele em 03/10.
