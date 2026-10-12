@@ -11,7 +11,7 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 
 | # | what | where | upstream status |
 | --- | --- | --- | --- |
-| 1 | `scripts/run-mcp-server.cjs` wrapper, CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.gitignore`, `.github/workflows/` | ours |
+| 1 | `scripts/run-mcp-server.cjs` wrapper, its pre-commit config (the central's gate, 12/10), CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.pre-commit-config.yaml`, `.gitignore`, `.github/workflows/` | ours |
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
 | 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source, `0.4.0.4` since foco zero: `storage` permission, `0.4.0.5` since the reveal for capture) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
@@ -443,6 +443,13 @@ survives), never a chosen name (`meu-print.png`). It is all async after the spaw
 neither delays the ~30 s startup nor kills the server. One-off run with the same rule:
 `node scripts/prune-mcp-output.cjs [--dry-run] [--days N] <output folder>...`. Test (plain node, exit 0/1):
 `node scripts/run-mcp-server.test.cjs`.
+
+**The central's gate runs the wrapper test.** The central's maestro closes every `[[FEITO]]` in this repo with
+`pre-commit run --files <files committed by the round>`; without a `.pre-commit-config.yaml` the framework exits 1
+(`.pre-commit-config.yaml is not a file`) and the round is read as rejected (measured 12/10/2026: one opus round lost
+on a roadmap-only commit). The fork's `.pre-commit-config.yaml` has one `local` hook, `node scripts/run-mcp-server.test.cjs`,
+that runs only when a `scripts/run-mcp-server*.cjs` file is in the commit; anything else is skipped. It is never
+installed as a git hook (`pre-commit install` would stash the shared tree on human commits); `npm run flint` stays the lint.
 
 To force pure npx again: put `"command": "npx", "args": ["-y", "@playwright/mcp@<pin>", "--extension", "--browser", "chrome"]`
 back in `~/.claude.json`. Restart Claude Code instances after changing it; it is live config shared by all of them.
