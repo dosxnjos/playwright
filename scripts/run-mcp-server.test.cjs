@@ -367,6 +367,24 @@ test('prepare (i): same pid, different time = two folders; the first is never to
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(second, 'owner.json'), 'utf8')).wrapper, 4242);
 });
 
+test('prepare (o): a failure after the mkdir (disk full on owner.json) leaves no half-made folder behind', () => {
+  const root = path.join(tempDir(), 'pw-ia');
+  const original = fs.writeFileSync;
+  fs.writeFileSync = () => {
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  };
+  let dir;
+  const log = collectingLog();
+  try {
+    dir = wrapper.prepareSessionTemp(root, 4242, { env: {}, log, now: NOW });
+  } finally {
+    fs.writeFileSync = original;
+  }
+  assert.strictEqual(dir, null, 'falls back to the default TEMP');
+  assert.deepStrictEqual(fs.readdirSync(root), [], 'the folder created before the failure is removed');
+  assert.ok(log.lines.some(line => /ENOSPC/.test(line) && /default TEMP/.test(line)), `logged: ${log.lines}`);
+});
+
 test('prepare (j): PLAYWRIGHT_MCP_SESSION_TEMP=0 gives null and touches nothing', () => {
   const root = path.join(tempDir(), 'pw-ia');
   assert.strictEqual(wrapper.prepareSessionTemp(root, 4242, { env: { PLAYWRIGHT_MCP_SESSION_TEMP: '0' }, log: collectingLog(), now: NOW }), null);
