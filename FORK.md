@@ -11,7 +11,7 @@ the unmerged ghost-tab commit: tag `fork-multi-connection-6f0b4cfdc`.
 
 | # | what | where | upstream status |
 | --- | --- | --- | --- |
-| 1 | `scripts/run-mcp-server.cjs` wrapper, its pre-commit config (the central's gate, 12/10), CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.pre-commit-config.yaml`, `.gitignore`, `.github/workflows/` | ours |
+| 1 | `scripts/run-mcp-server.cjs` wrapper (+ `run-mcp-server.smoke.cjs`, the real-chromium proof of its per-session TEMP), its pre-commit config (the central's gate, 12/10), CI workflows trimmed to manual + `tests_extension.yml` | `scripts/`, `.pre-commit-config.yaml`, `.gitignore`, `.github/workflows/` | ours |
 | 2 | `browser_set_group_label` tool | `backend/groupLabel.ts`, `backend/extensionSession.ts`, `mcp/{cdpRelay,protocol,extensionContextFactory}.ts`, `extension/src/{background,connectedTabGroup,relayConnection}.ts` | not upstream (#41840 open) |
 | 3 | agent-owned tabs are **closed** on disconnect | `extension/src/{connectedTabGroup,background}.ts` | upstream only ungroups, by design (#41864) |
 | 4 | dark theme + redesigned connect/status UI, manifest `0.4.0.x` (`0.4.0.3` since patch 7's popup source, `0.4.0.4` since foco zero: `storage` permission, `0.4.0.5` since the reveal for capture) | `extension/src/ui/`, `extension/manifest.json` | declined (#41841) |
@@ -444,6 +444,22 @@ neither delays the ~30 s startup nor kills the server. One-off run with the same
 `node scripts/prune-mcp-output.cjs [--dry-run] [--days N] <output folder>...`. Test (plain node, exit 0/1):
 `node scripts/run-mcp-server.test.cjs`.
 
+**AI-opened sessions get their own TEMP.** An isolated chromium killed hard (`TerminateProcess` runs no handler, no
+cleanup inside the dying process can help) leaves `playwright_chromiumdev_profile-*` (~11 MB) and `playwright-artifacts-*`
+in `%TEMP%`: 7 of them in two days on 10-11/10/2026, while the central's disk neared its floor. So an `ia:*` launch
+(`prepareSessionTemp`) creates `%TEMP%\pw-ia\<wrapper pid>-<base36 time>` with an `owner.json`
+(`{wrapper, server, createdAt}`; the server pid is added right after the spawn) and hands that folder to the server as
+`TEMP`/`TMP`/`TMPDIR` (`envForAiSession`). The folder is never reused. Two ways it goes away: a normal end removes it
+in the wrapper's exit hook (`runAndExit`'s `onExit`), and every later `ia:*` launch sweeps (`sweepSessionTemps`, async
+after the spawn) the folders whose pids are **all** dead (`EPERM` counts as alive; no `owner.json` = judged by the pid in
+the name and only at 10+ min of age; a name outside `^\d+-[0-9a-z]+$` or a busy file is skipped, `EBUSY` retried next
+launch). Any failure creating the folder (disk full is the motivating case) falls back to the default TEMP with a line on
+stderr; human sessions never touch it. `PLAYWRIGHT_MCP_SESSION_TEMP=0` turns it all off. Proof with a real chromium:
+`node scripts/run-mcp-server.smoke.cjs` → `smoke ok` (run it after touching this; it needs the build and the stamp up to
+date, and with `PLAYWRIGHT_MCP_SESSION_TEMP=0` it must say `smoke FAIL 4`). ⚠️ On Windows a hard kill of the wrapper
+takes the server and the chromium with it (libuv puts every child in a kill-on-close job object; measured 16/10/2026),
+so the folder of a dead session is complete and unlocked: that is exactly what the sweep removes.
+
 **The central's gate runs the wrapper test.** The central's maestro closes every `[[FEITO]]` in this repo with
 `pre-commit run --files <files committed by the round>`; without a `.pre-commit-config.yaml` the framework exits 1
 (`.pre-commit-config.yaml is not a file`) and the round is read as rejected (measured 12/10/2026: one opus round lost
@@ -467,6 +483,8 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
 
 ## Testing gotchas
 
+- **`scripts/run-mcp-server.smoke.cjs` launches a real chromium** and needs the fork built with the stamp up to date
+  (`isForkStale()` false, else `smoke FAIL 0`); it is the executor's proof, never a gate hook.
 - **`tests/extension/` needs a human on Windows.** The connect flow relies on Chrome's OS-level singleton (relaunching
   the same `chrome.exe`/`--user-data-dir` opens a tab in the existing window); on Windows the tests hang at 30 s and
   ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (**disabled manually in the repo's Actions tab as of 29/09/2026**:
