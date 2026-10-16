@@ -186,7 +186,7 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
 - Rodar o teste do wrapper não deixa pasta nova no `%TEMP%`. Se falhasse: `run-mcp-server-test-*` sobrando depois
   de `node scripts/run-mcp-server.test.cjs`.
 
-1. [ ] Em `scripts/run-mcp-server.cjs`, criar `sessionTempRoot(env)` → `path.join(<TEMP do wrapper>, 'pw-ia')`
+1. [x] (prova: `true 4242 null`, 16/10) Em `scripts/run-mcp-server.cjs`, criar `sessionTempRoot(env)` → `path.join(<TEMP do wrapper>, 'pw-ia')`
    (usar `os.tmpdir()`; acrescentar `const os = require('os');` junto aos `require` de `:28`–`:30`) e
    `prepareSessionTemp(root, pid, { env, log, now })`: pasta `root\<pid>-<now em base36>` (D2: nunca reusa nem
    limpa pasta existente); `mkdirSync({ recursive: true })`; grava `owner.json`
@@ -195,11 +195,11 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    `env.PLAYWRIGHT_MCP_SESSION_TEMP === '0'` → devolve `null` sem tocar o disco. Exportar as duas.
    — **prova:** `node -e "const w=require('./scripts/run-mcp-server.cjs');const os=require('os'),p=require('path'),fs=require('fs');const r=fs.mkdtempSync(p.join(os.tmpdir(),'pwia-'));const d=w.prepareSessionTemp(r,4242,{env:{},log(){}});console.log(/^4242-[0-9a-z]+$/.test(p.basename(d)), JSON.parse(fs.readFileSync(p.join(d,'owner.json'))).wrapper, w.prepareSessionTemp(r,4242,{env:{PLAYWRIGHT_MCP_SESSION_TEMP:'0'},log(){}}));fs.rmSync(r,{recursive:true,force:true})"` → `true 4242 null`
    **reprova se:** `false`, `null` no lugar do caminho, lança, ou o último valor não for `null` (desligamento ignorado).
-2. [ ] Mudar `envForAiSession(env, origem, sessionTemp)` (`:167`): com `sessionTemp` não nulo e origem `ia:*`,
+2. [x] (prova coberta pelo caso k do teste; `S S S T T`) Mudar `envForAiSession(env, origem, sessionTemp)` (`:167`): com `sessionTemp` não nulo e origem `ia:*`,
    devolve também `TEMP`, `TMP` e `TMPDIR` = `sessionTemp`; sem ele, ou origem humana, o env sai como hoje.
    — **prova:** `node -e "const w=require('./scripts/run-mcp-server.cjs');const a=w.envForAiSession({TEMP:'T'},'ia:x','S');const b=w.envForAiSession({TEMP:'T'},'humano:x','S');const c=w.envForAiSession({TEMP:'T'},'ia:x',null);console.log(a.TEMP,a.TMP,a.TMPDIR,b.TEMP,c.TEMP)"` → `S S S T T`
    **reprova se:** a primeira tripla não for `S S S` ou o humano/nulo trocar o TEMP.
-3. [ ] `runAndExit` (`:121`) passa a devolver o `child` e aceita `onExit` opcional, chamado (síncrono, dentro de
+3. [x] (os 12 testes antigos seguem `ok` dentro dos 27; `+` caso n prova o `onExit` nos dois ramos) `runAndExit` (`:121`) passa a devolver o `child` e aceita `onExit` opcional, chamado (síncrono, dentro de
    `try/catch`) antes do `process.exit`/`process.kill` nos dois ramos de `'exit'` **e** no `'error'` (spawn que
    falhou também libera a pasta). Em `main` (`:325`): só quando `argv !== rawArgv` (sessão `ia:*`),
    `prepareSessionTemp` **antes** do spawn; env com o `sessionTemp`; depois do spawn, regrava o `owner.json` com
@@ -208,7 +208,7 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    `try/catch`. `sessionTemp` nulo = nada disso roda.
    — **prova:** `node --check scripts/run-mcp-server.cjs && node scripts/run-mcp-server.test.cjs` → termina em `12/12 passed` (antes dos testes novos)
    **reprova se:** erro de sintaxe ou qualquer `FAIL` nos 12 testes atuais.
-4. [ ] Criar `sweepSessionTemps(root, { ownDir, now, isAlive, log })` (async, nunca rejeita) e
+4. [x] (`isPidAlive` exportada; `+` a pasta meio-feita some se o `owner.json` falhar) Criar `sweepSessionTemps(root, { ownDir, now, isAlive, log })` (async, nunca rejeita) e
    `scheduleSessionTempSweep(...)` no molde de `schedulePrune` (`:298`: `setImmediate`, `safeLog`, `.catch`).
    Regra (D3–D6): raiz inexistente (`ENOENT` no `readdir`) = silêncio, sem log. Para cada entrada de `root` que é
    pasta, nome `^\d+-[0-9a-z]+$` e não é `ownDir`: lê `owner.json` (ilegível ou ausente → pids =
@@ -222,7 +222,7 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    `scheduleSessionTempSweep(`. Exportar as duas.
    — **prova:** `node scripts/run-mcp-server.test.cjs` → `N/N passed` com os casos do passo 5
    **reprova se:** algum `FAIL`.
-5. [ ] Em `scripts/run-mcp-server.test.cjs`, casos novos (um `test(...)` cada, `isAlive` injetado, raiz em
+5. [x] (27/27: `+` m liveness com `EPERM`/`ESRCH`, n `onExit`, o falha após o mkdir; 9 mutantes do wrapper mortos; vazamento do runner 9 → 0) Em `scripts/run-mcp-server.test.cjs`, casos novos (um `test(...)` cada, `isAlive` injetado, raiz em
    `tempDir()`):
    a) pid morto → pasta sai; b) pid vivo → fica; c) wrapper morto mas `server` vivo no `owner.json` → fica;
    d) nome fora do padrão (`foo`, `123`, `123abc`) com pid morto → fica; e) `ownDir` → fica mesmo morto; f) sem
@@ -236,15 +236,15 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    não derruba o resultado). **Mutantes:** para cada guarda (D3 `server` vivo, D5 regex, `ownDir`, D6 idade,
    `EPERM` = vivo), copiar o wrapper para `temp/` (gitignorado), apagar a guarda e rodar com
    `RUN_MCP_SERVER_PATH=<cópia>`: tem de dar `FAIL`.
-   — **prova:** `node scripts/run-mcp-server.test.cjs` → `24/24 passed`
-   **reprova se:** menos de 24 casos ou algum `FAIL`; e, por mutante, `RUN_MCP_SERVER_PATH=temp/<mutante>.cjs node scripts/run-mcp-server.test.cjs` sair com exit 0.
+   — **prova:** `node scripts/run-mcp-server.test.cjs` → `27/27 passed` (os 24 do contrato + `+` m, n, o)
+   **reprova se:** menos de 27 casos ou algum `FAIL`; e, por mutante, `RUN_MCP_SERVER_PATH=temp/<mutante>.cjs node scripts/run-mcp-server.test.cjs` sair com exit 0.
    — **prova:** `powershell -c "$a=(Get-ChildItem $env:TEMP -Directory -Filter 'run-mcp-server-test-*').Count; node scripts/run-mcp-server.test.cjs | Out-Null; $b=(Get-ChildItem $env:TEMP -Directory -Filter 'run-mcp-server-test-*').Count; echo ($b - $a)"` → `0`
    **reprova se:** maior que `0` (o runner ainda vaza).
-6. [ ] Limpar o acervo de uma vez: as pastas `run-mcp-server-test-*` na raiz do `%TEMP%` são só deste teste
+6. [x] (já em 0 quando a fase começou, 16/10: alguém limpou antes; nada a apagar) Limpar o acervo de uma vez: as pastas `run-mcp-server-test-*` na raiz do `%TEMP%` são só deste teste
    (`mkdtemp` com prefixo próprio, `:30`), todas de rodadas já terminadas. Apagar e registrar o número no relatório.
    — **prova:** `powershell -c "Get-ChildItem $env:TEMP -Directory -Filter 'run-mcp-server-test-*' | Remove-Item -Recurse -Force; (Get-ChildItem $env:TEMP -Directory -Filter 'run-mcp-server-test-*').Count"` → `0`
    **reprova se:** maior que `0`.
-7. [ ] Prova fim a fim com navegador de verdade: `scripts/run-mcp-server.smoke.cjs` (novo, fora do teste unitário
+7. [x] (`smoke ok`; contraprova `SESSION_TEMP=0` → `smoke FAIL 4`; ⚠️ o passo (5) mudou: no Windows o servidor morre junto com o wrapper, ver relatório) Prova fim a fim com navegador de verdade: `scripts/run-mcp-server.smoke.cjs` (novo, fora do teste unitário
    porque lança Chromium). Pré-condição: fork compilado e carimbo em dia (`isForkStale()` falso; senão `npm run
    build` e `touch scripts/.build-stamp`, FORK.md § Running). Roteiro:
    (1) anota a hora e a lista de `playwright_chromiumdev_profile-*` na raiz do `%TEMP%`;
@@ -276,11 +276,11 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    errada ou limpeza indevida) ou `FAIL 8` (varredura ou limpeza na saída sem efeito).
    Contraprova obrigatória: com `PLAYWRIGHT_MCP_SESSION_TEMP=0` no env do spawn, o mesmo script tem de dar
    `smoke FAIL 4`.
-8. [ ] Sessão humana intacta: o mesmo spawn sem `CENTRAL_ORIGEM` só até o `initialize` (sem navegar, a extensão
+8. [x] (`intacta`) Sessão humana intacta: o mesmo spawn sem `CENTRAL_ORIGEM` só até o `initialize` (sem navegar, a extensão
    não conecta sem humano).
    — **prova:** `node -e "const {spawn}=require('child_process');const c=spawn(process.execPath,['scripts/run-mcp-server.cjs','--extension','--browser','chrome'],{env:{...process.env,CENTRAL_ORIGEM:''}});let e='';c.stderr.on('data',d=>e+=d);setTimeout(()=>{c.kill();console.log(/pw-ia|session temp/.test(e)?'tocou':'intacta')},4000)"` → `intacta`
    **reprova se:** `tocou`.
-9. [ ] Docs: `FORK.md` § "Running the server from this fork", parágrafo novo depois de "Each launch prunes the output
+9. [ ] (FORK.md feito; hub e tema do cérebro barrados pela jaula do `guarda-escrita` na sessão do maestro: texto exato no card lateral e no fragmento do diário, ver relatório) Docs: `FORK.md` § "Running the server from this fork", parágrafo novo depois de "Each launch prunes the output
    folder": **"AI-opened sessions get their own TEMP."** (pasta, `owner.json`, regra da varredura, limpeza na
    saída, `PLAYWRIGHT_MCP_SESSION_TEMP=0`, smoke); o parágrafo "The central's gate runs the wrapper test" já
    existe (auditoria 12/10), só citar o smoke nele se mudar o hook. Na tabela de patches, linha 1, citar
@@ -289,7 +289,7 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
    Tema `C:\Dev\cerebro\temas\playwright-mcp.md` § sessão aberta por IA: 1 linha. `Edit` ancorado, nunca `Write`.
    — **prova:** `grep -c "pw-ia" FORK.md C:/Dev/cerebro/projetos/playwright.md C:/Dev/cerebro/temas/playwright-mcp.md` → cada arquivo com 1 ou mais
    **reprova se:** algum arquivo com `0`.
-10. [ ] Commit por pathspec na `main` do checkout principal (`scripts/run-mcp-server.cjs
+10. [x] (quatro commits: teste vermelho `13b319f03`, conserto `931b6e03a`, `09727db8b`, `a77f49b45`; relatório e md no commit seguinte; pre-commit `Passed`) Commit por pathspec na `main` do checkout principal (`scripts/run-mcp-server.cjs
     scripts/run-mcp-server.test.cjs scripts/run-mcp-server.smoke.cjs FORK.md`), mensagem
     `feat(wrapper): AI sessions get their own TEMP, swept when their processes are gone (fork)`. Antes do commit,
     rodar o que o gate da central vai rodar: `pre-commit run --files scripts/run-mcp-server.cjs
@@ -301,7 +301,7 @@ tira o lixo do caminho de todo mundo, isolando-o numa pasta que só o wrapper va
     já estava 4 commits à frente: desenho, linhagem, yaml do fork e auditoria).
     — **prova:** `git log -1 --format=%s -- scripts/run-mcp-server.cjs && git status -sb | head -1` → a mensagem acima e `## main...origin/main` sem `[ahead`
     **reprova se:** outra mensagem (a mudança não foi commitada) ou `[ahead N]` (não foi pushado).
-11. [ ] Propagar: `anotar_card cc44810c2c259` (faxina) com "origem MCP blindada: perfis do MCP de sessão `ia:*`
+11. [x] (4 cards anotados; `cc44810c2c259` contém `pw-ia`) Propagar: `anotar_card cc44810c2c259` (faxina) com "origem MCP blindada: perfis do MCP de sessão `ia:*`
     agora nascem em `%TEMP%\pw-ia\<pid>` e somem na próxima largada; ver card lateral `cbf3ffaf58ead`". Buscar roadmaps
     abertos que citam o vazamento: `grep -rln "chromiumdev_profile" C:/Dev/central/roadmap C:/Dev/playwright/roadmap`
     e anotar no card dono de cada md encontrado (nunca editar md de outra sessão).
