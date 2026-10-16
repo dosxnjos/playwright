@@ -27,6 +27,8 @@ const WRAPPER = process.env.RUN_MCP_SERVER_PATH || path.join(__dirname, 'run-mcp
 const { isForkStale, isPidAlive } = require(WRAPPER);
 const ROOT = path.join(os.tmpdir(), 'pw-ia');
 const PROFILE = /^playwright_chromiumdev_profile-/;
+const ARTIFACTS = /^playwright-artifacts-/;
+const LEAK = /^(playwright_chromiumdev_profile|playwright-artifacts)-/;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const alive = [];
@@ -41,7 +43,7 @@ class Failure extends Error {
 
 function rootProfiles() {
   try {
-    return fs.readdirSync(os.tmpdir()).filter(name => PROFILE.test(name));
+    return fs.readdirSync(os.tmpdir()).filter(name => LEAK.test(name));
   } catch {
     return [];
   }
@@ -164,8 +166,9 @@ async function main() {
   if (dirs.length !== 1)
     throw new Failure('4', `expected one ${ROOT}\\${wrapperPid}-* folder, found ${dirs.length}`);
   const dead = dirs[0];
-  if (!fs.readdirSync(dead).some(name => PROFILE.test(name)))
-    throw new Failure('4', `no chromium profile inside ${dead}: ${fs.readdirSync(dead).join(', ')}`);
+  const inside = fs.readdirSync(dead);
+  if (!inside.some(name => PROFILE.test(name)) || !inside.some(name => ARTIFACTS.test(name)))
+    throw new Failure('4', `expected a chromium profile AND a playwright-artifacts folder inside ${dead}, found: ${inside.join(', ')}`);
 
   // (5) hard death, wrapper first (D12): TerminateProcess runs no 'exit' handler, so the wrapper cleans nothing.
   // Measured 16/10/2026 on Windows: libuv puts every child in a kill-on-close job object, so the server (and
@@ -193,7 +196,7 @@ async function main() {
     throw new Failure('6', 'the dead session folder vanished before the next launch');
   const fresh = rootProfiles().filter(name => !profilesBefore.has(name));
   if (fresh.length)
-    process.stderr.write(`smoke warning: new chromium profiles in the %TEMP% root (another project's suite?): ${fresh.join(', ')}\n`);
+    process.stderr.write(`smoke warning: new chromium profile/artifact folders in the %TEMP% root (another project's suite?): ${fresh.join(', ')}\n`);
 
   // (7) next AI launch: sweeps the dead folder (async, after its spawn), then a clean stdin close.
   const second = launch();
