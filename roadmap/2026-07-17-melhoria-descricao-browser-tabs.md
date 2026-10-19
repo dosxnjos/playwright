@@ -183,3 +183,5 @@ revisão:
    de rebase com upstream (mesma classe do `tools.ts` registrado na Fase 2.1 de
    lá) — mais um argumento a favor de tentar o caminho upstream para ESTA
    mudança específica, já que é doc-only.
+
+> Auditado em 2026-09-01 (overhaul): FECHADO — commit 396603082 (docs(tools): warn about the shared current-tab pointer)

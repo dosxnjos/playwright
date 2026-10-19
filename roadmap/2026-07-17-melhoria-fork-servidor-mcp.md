@@ -529,3 +529,5 @@ Correções aplicadas nesta revisão (não repetir os erros ao executar):
    requalificado (§ Alvo e estado atual).
 5. `main` == `extension-multi-connection` (commit `711b96ba1`) e remote
    `upstream` inexistente — dúvidas do texto original resolvidas.
+
+> Auditado em 2026-09-01 (overhaul): FECHADO — Fase 0 itens 1–5, Fase 1 (e299560fd, groupLabel.ts), Fase 2 documentada (60953d47f); validação no CI macOS segue não rodada
