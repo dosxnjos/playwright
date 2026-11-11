@@ -119,7 +119,9 @@ class PlaywrightExtension {
 
   private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, seedOwner: TabOwner, silent = false, putBack = false): Promise<void> {
     try {
-      await this._cleanupPromise;
+      // Fork (11/11/2026): the cleanup of a dead worker's tabs must never hold a new connection for long. If it hangs
+      // (a tab API call that never settles), connect anyway after 3 s; the cleanup keeps running on its own.
+      await Promise.race([this._cleanupPromise, new Promise<void>(resolve => setTimeout(resolve, 3000))]);
       this._releaseTab(selectorTabId);
       if (tab.id !== selectorTabId && this._connectedTabIds().has(tab.id))
         throw new Error('This tab is already connected to another client');
