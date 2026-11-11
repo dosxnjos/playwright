@@ -53,18 +53,100 @@ export function uniqueGroupStyle(clientName: string | undefined, taken: readonly
   return { title, color };
 }
 
-// Ungroups any Playwright-titled groups left behind by a prior service worker.
+// Fork (11/11/2026): a service worker that dies (MV3 idle death, crash) takes every connection's ownership map with it,
+// and no close handler runs. Agent-owned tabs (and the agent's seed) are also recorded here so the next worker can close
+// them. chrome.storage.session dies with the browser session, so a tab id Chrome reuses after a restart is never taken
+// for an agent's tab. It is also wiped when the extension is reloaded, updated or disabled: the next worker then finds
+// no record and only ungroups (agent tabs of a connection alive at that moment stay open, loose). Writes are chained so
+// the store always ends with the latest set.
+const AGENT_TABS_KEY = 'playwrightAgentTabs';
+const agentTabRecord = new Set<number>();
+let agentTabWrite: Promise<void> = Promise.resolve();
+
+function persistAgentTabs(): void {
+  const tabIds = [...agentTabRecord];
+  agentTabWrite = agentTabWrite
+      .then(() => chrome.storage.session.set({ [AGENT_TABS_KEY]: tabIds }))
+      .catch(error => debugLog('Error recording agent tabs:', error));
+}
+
+function recordAgentTab(tabId: number): void {
+  if (agentTabRecord.has(tabId))
+    return;
+  agentTabRecord.add(tabId);
+  persistAgentTabs();
+}
+
+function forgetAgentTabs(tabIds: Iterable<number>): void {
+  let changed = false;
+  for (const tabId of tabIds)
+    changed = agentTabRecord.delete(tabId) || changed;
+  if (changed)
+    persistAgentTabs();
+}
+
+async function readAgentTabRecord(): Promise<Set<number>> {
+  try {
+    const stored = (await chrome.storage.session.get(AGENT_TABS_KEY))[AGENT_TABS_KEY];
+    return new Set(Array.isArray(stored) ? stored.filter((id): id is number => typeof id === 'number') : []);
+  } catch (error: any) {
+    debugLog('Error reading agent tabs:', error);
+    return new Set();
+  }
+}
+
+// One by one: a batch remove aborts on the first tab that is gone, and every other tab would survive.
+async function closeTabs(tabIds: number[], what: string): Promise<void> {
+  const results = await Promise.allSettled(tabIds.map(tabId => retryOnDrag(() => chrome.tabs.remove(tabId))));
+  for (const result of results) {
+    if (result.status === 'rejected')
+      debugLog(`Error closing ${what}:`, result.reason);
+  }
+}
+
+// The windows that have the focus. Unknown (the query failed) -> every window counts as focused, so nothing in front
+// of the user is closed by mistake.
+async function focusedWindowIds(): Promise<(windowId: number) => boolean> {
+  try {
+    const focused = new Set((await chrome.windows.getAll()).filter(w => w.focused).map(w => w.id));
+    return windowId => focused.has(windowId);
+  } catch (error: any) {
+    debugLog('Error reading focused windows:', error);
+    return () => true;
+  }
+}
+
+// Runs once per service worker start: every Playwright-titled group belongs to a connection of a prior worker, now dead.
+// Fork: the tabs that worker recorded as agent-owned are closed (with its seeds still on the connect page, which never
+// entered a group), the rest are only ungrouped. Without a record (a worker of an older version) everything is
+// ungrouped, as upstream does. An agent tab that is the active tab of a focused window is never closed, only
+// ungrouped: the user may be typing in it (a 2FA code the agent asked for), main session's tab included.
 export async function cleanupStalePlaywrightGroups(): Promise<void> {
   try {
+    const agentTabs = await readAgentTabRecord();
     const groups = await chrome.tabGroups.query({});
     // The bare title comes from versions that predate per-client groups.
     const stale = groups.filter(g => g.title === PLAYWRIGHT_GROUP_TITLE || g.title?.startsWith(PLAYWRIGHT_GROUP_TITLE_PREFIX));
     const tabsPerGroup = await Promise.all(stale.map(g => chrome.tabs.query({ groupId: g.id })));
-    const tabIds = tabsPerGroup.flat().map(t => t.id).filter((id): id is number => id !== undefined);
-    if (tabIds.length)
-      await ungroupTabs(tabIds);
+    const groupTabs = tabsPerGroup.flat().filter(t => t.id !== undefined);
+    const tabIds = groupTabs.map(t => t.id!);
+    const isFocusedWindow = await focusedWindowIds();
+    const inFront = (tab: chrome.tabs.Tab) => tab.active && isFocusedWindow(tab.windowId);
+    const toClose = groupTabs.filter(t => agentTabs.has(t.id!) && !inFront(t)).map(t => t.id!);
+    const toUngroup = tabIds.filter(id => !toClose.includes(id));
+    if (toUngroup.length)
+      await ungroupTabs(toUngroup);
+    await closeTabs(toClose, 'an agent tab left by a dead service worker');
+    const connectPage = chrome.runtime.getURL('connect.html');
+    const ungrouped = await Promise.all([...agentTabs].filter(id => !tabIds.includes(id)).map(id => chrome.tabs.get(id).catch(() => undefined)));
+    const seeds = ungrouped.filter(tab => tab?.id !== undefined && tab.url?.startsWith(connectPage) && !inFront(tab)).map(tab => tab!.id!);
+    await closeTabs(seeds, 'an agent seed left by a dead service worker');
   } catch (error: any) {
     debugLog('Error cleaning up stale groups:', error);
+  } finally {
+    // Every connection the record spoke for is gone: this worker's connections start a new one.
+    agentTabRecord.clear();
+    persistAgentTabs();
   }
 }
 
@@ -109,7 +191,7 @@ export class ConnectedTabGroup {
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
     this._connection.ontabdetached = (tabId: number) => this._onTabDetached(tabId);
     // A tab the user took over is theirs from now on: ungrouped on close, never closed.
-    this._connection.ontabtakenover = (tabId: number) => this._agentOwnedTabs.delete(tabId);
+    this._connection.ontabtakenover = (tabId: number) => this._disownTab(tabId);
     this._connection.onsetgrouplabel = async label => {
       if (!this.onlabelrequest)
         throw new Error('No label handler registered for this connection');
@@ -122,8 +204,11 @@ export class ConnectedTabGroup {
     // 'agent' when no tab was picked (token bypass), 'user' when the connect page's picker chose one.
     if (selectedTab.id !== undefined)
       this._pendingOwner.set(selectedTab.id, seedOwner);
-    if (seedOwner === 'agent')
+    if (seedOwner === 'agent') {
       this._agentSeedTabId = selectedTab.id;
+      if (selectedTab.id !== undefined)
+        recordAgentTab(selectedTab.id);
+    }
     // Seed the relay with the user-selected tab, then close out the initial
     // handshake. The relay holds Playwright-side CDP traffic until
     // `didInitialize` arrives, so it sees a fully populated tab model by the
@@ -151,8 +236,14 @@ export class ConnectedTabGroup {
     if (!this._groupTabIds.has(tabId))
       return;
     this._groupTabIds.delete(tabId);
-    this._agentOwnedTabs.delete(tabId);
+    this._disownTab(tabId);
     this._connection.detachTab(tabId);
+  }
+
+  // Fork: the in-memory owner map and the record that outlives the worker always change together.
+  private _disownTab(tabId: number): void {
+    this._agentOwnedTabs.delete(tabId);
+    forgetAgentTabs([tabId]);
   }
 
   private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): void {
@@ -195,7 +286,7 @@ export class ConnectedTabGroup {
         this._connection.attachTab(tab);
     } else {
       this._groupTabIds.delete(tabId);
-      this._agentOwnedTabs.delete(tabId);
+      this._disownTab(tabId);
       if (this._connection.attachedTabs.has(tabId))
         this._connection.detachTab(tabId);
     }
@@ -203,7 +294,7 @@ export class ConnectedTabGroup {
 
   private _onTabRemoved(tabId: number): void {
     this._groupTabIds.delete(tabId);
-    this._agentOwnedTabs.delete(tabId);
+    this._disownTab(tabId);
     this._pendingOwner.delete(tabId);
   }
 
@@ -212,8 +303,10 @@ export class ConnectedTabGroup {
   private _claimOwner(tabId: number, fallback: TabOwner | undefined): void {
     const owner = this._pendingOwner.get(tabId) ?? fallback;
     this._pendingOwner.delete(tabId);
-    if (owner === 'agent')
+    if (owner === 'agent') {
       this._agentOwnedTabs.add(tabId);
+      recordAgentTab(tabId);
+    }
   }
 
   private _onTabAttached(tabId: number): void {
@@ -242,18 +335,14 @@ export class ConnectedTabGroup {
     this._groupTabIds.clear();
     this._agentOwnedTabs.clear();
     this._pendingOwner.clear();
-    if (userOwnedTabs.length)
-      void ungroupTabs(userOwnedTabs);
-    // One by one: a batch remove aborts on the first tab that is gone, and every other agent tab would survive.
-    void Promise.allSettled(agentOwnedTabs.map(tabId => retryOnDrag(() => chrome.tabs.remove(tabId)))).then(results => {
-      for (const result of results) {
-        if (result.status === 'rejected')
-          debugLog('Error closing agent-owned tabs on close:', result.reason);
-      }
-    });
     // Agent seed still on connect.html: never entered the group, so it is not in `groupTabs`.
     const seedTabId = this._agentSeedTabId;
     this._agentSeedTabId = undefined;
+    // This worker closes or ungroups them right here: nothing is left for a later worker.
+    forgetAgentTabs(seedTabId === undefined ? groupTabs : [...groupTabs, seedTabId]);
+    if (userOwnedTabs.length)
+      void ungroupTabs(userOwnedTabs);
+    void closeTabs(agentOwnedTabs, 'agent-owned tabs on close');
     if (seedTabId !== undefined && !groupTabs.includes(seedTabId)) {
       chrome.tabs.get(seedTabId).then(tab => {
         if (tab.url?.startsWith(chrome.runtime.getURL('connect.html')))

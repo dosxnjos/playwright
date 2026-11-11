@@ -92,6 +92,9 @@ HTTP mode uses per client. Plan and measurements: `roadmap/2026-10-03-melhoria-a
   - a server process killed without dispose leaves its empty session folder behind (harmless, nothing reads it);
   - release markers only cover agents whose SubagentStop fires (normal end of an Agent tool or Workflow agent,
     measured; Esc or crash not measured): the idle timeout stays the safety net.
+  - a marker can only release a connection that is still alive. When the extension's service worker dies mid-way, the
+    agent's backend is already gone (`disconnected`) and its tab group is orphaned on the extension side: the next
+    worker start closes it (§ The extension, "Service worker death"), never the router.
 - **`browser_close` text** promises that other agents keep their tabs. That is only true with the hook installed;
   with routing off (`ia:*`, persistent) the backend is shared and the close takes everyone's tabs. The old patch 5
   (tool texts warning that the current tab is shared) was dropped after the live gate (roadmap 2.3, 03/10/2026):
@@ -481,6 +484,27 @@ vault note lists. Hit Profile 13 on 01/10/2026 (stale 0.2.1 from 17/07), cured t
 The manifest `key` pins the same extension ID as the Chrome Web Store version: disable the store copy in that profile
 first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need the `chromium` channel.
 
+**Service worker death (11/11/2026).** An MV3 worker that dies (idle, crash) loses every `ConnectedTabGroup`, and no
+`_onConnectionClose` runs. Upstream's start-up `cleanupStalePlaywrightGroups` only ungroups the Playwright-titled groups,
+so the agent's tabs stayed open and loose. Found while chasing a Workflow agent's two orphan groups (11/11); those two
+were orphaned with the worker alive, cause not found, so this fix does not explain them.
+The fork records agent-owned tabs and agent seeds in `chrome.storage.session` (`playwrightAgentTabs`; it dies with the
+browser session, so a tab id reused after a restart is never mistaken for an agent's). The start-up cleanup closes
+those tabs and the seeds still on `connect.html`, ungroups the rest, then starts a fresh record. With no record (a
+worker of an older version) it behaves as upstream.
+⚠️ `chrome.storage.session` is also wiped when the extension is **reloaded, updated or disabled**: the next worker
+finds no record and only ungroups, so agent tabs of a connection alive at that moment stay open and loose (close them
+by hand). The "Reload" in each of the four Chrome profiles is such a wipe: reload with no agent connected.
+**Tab in front of the user:** an agent tab (main session's included) that is the active tab of a focused window is
+never closed by the start-up cleanup, only ungrouped: the user may be typing in it (a 2FA code). A failed window query
+counts as focused. Same rule for a loose seed. Not applied to a normal `_onConnectionClose` (the agent ended).
+Test: `tests/extension/worker-death.spec.ts` (headless, in-process, runs on Windows: `npm run test-extension --
+worker-death --workers=1`); it kills the worker with `Target.closeTarget`. Four cases: agent tab closed and user tab
+ungrouped; no record -> only ungroup; worker dead before the agent's first navigation -> the connect page is closed
+(measured: the seed is already in the group then, so the loose-seed path is not what closes it); agent tab active in a
+focused window -> only ungrouped (a mutant without the guard turns it red, 11/11). Extension 0.4.0.6; needs a Reload in
+each profile.
+
 ## Testing gotchas
 
 - **`scripts/run-mcp-server.smoke.cjs` launches a real chromium** and needs the fork built with the stamp up to date
@@ -490,8 +514,8 @@ first. `--load-extension` is ignored on branded Chrome 137+; scripted runs need 
   ask you to click "Allow & select" by hand. Validation is the macOS `tests_extension.yml` (**disabled manually in the repo's Actions tab as of 29/09/2026**:
   enable it there to use it; push to `main`
   with paths under `packages/extension/`, `tests/extension/` or `tools/`; free on a public repo) and a live check. `tests/mcp/` runs fine locally (`npm run ctest-mcp`).
-  Exception: `tests/extension/popup-source.spec.ts` (and `focus-zero.spec.ts`, `capture-reveal.spec.ts`, same
-  harness) connects real relays in-process to the extension in headless
+  Exception: `tests/extension/popup-source.spec.ts` (and `focus-zero.spec.ts`, `capture-reveal.spec.ts`,
+  `worker-death.spec.ts`, same harness) connects real relays in-process to the extension in headless
   Chromium (no singleton, no click), so it runs locally; it stubs `child_process.spawn` only for the relay's launch
   (its `executablePath` is node), since the same process launches Chromium.
 - ⚠️ **Unset `PLAYWRIGHT_MCP_EXTENSION_TOKEN` (and `PLAYWRIGHT_MCP_EXTENSION`) before running extension tests.** If the
