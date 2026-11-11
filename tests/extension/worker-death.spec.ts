@@ -218,7 +218,7 @@ test('a worker that dies before the agent first navigates leaves no connect page
   const seeds = await connectPageTabs(probe);
   expect(seeds, 'exactly one connect page, the agent seed').toHaveLength(1);
   await expect.poll(() => agentTabRecord(probe), { message: 'the seed is recorded as the agent\'s' }).toContain(seeds[0]);
-  await bringProbeToFront(probe);
+  await expect.poll(() => probe.evaluate(async id => (await chrome.tabs.get(id)).groupId, seeds[0]), { message: 'the seed is in the agent\'s group' }).toBeGreaterThan(-1);  await bringProbeToFront(probe);
 
   await killServiceWorker(browserContext);
   await probe.reload();

@@ -398,7 +398,7 @@ with `pw:mcp:shot` around the capture, `backgroundScreenshotTimeout` = 60 s), `b
 the early return in the `chrome.tabs.onCreated` case, the `extension.revealForCapture`/`restoreAfterCapture` case in
 `_handleCommand`, the `captureReveal.hasPending` branch in `_onClose` with `_detachAllAndNotifyClose`), `extension/manifest.json` (`webNavigation`).
 Then check: `npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent screenshot`,
-`npm run test-extension -- popup-source focus-zero capture-reveal` (headless, runs on Windows), plus from `packages/extension/`
+`npm run test-extension -- popup-source focus-zero capture-reveal worker-death` (headless, runs on Windows), plus from `packages/extension/`
 `npx tsc -p tsconfig.json --noEmit` and `npx tsc -p tsconfig.ui.json --noEmit`.
 
 ⚠️ `npm run flint` does **not** cover `packages/extension/` (its two tsconfigs are not in the root project): a real
@@ -501,7 +501,8 @@ counts as focused. Same rule for a loose seed. Not applied to a normal `_onConne
 Test: `tests/extension/worker-death.spec.ts` (headless, in-process, runs on Windows: `npm run test-extension --
 worker-death --workers=1`); it kills the worker with `Target.closeTarget`. Four cases: agent tab closed and user tab
 ungrouped; no record -> only ungroup; worker dead before the agent's first navigation -> the connect page is closed
-(measured: the seed is already in the group then, so the loose-seed path is not what closes it); agent tab active in a
+(the test asserts the seed is already in the group then, so the loose-seed path is not what closes it; with the
+record cleared before the kill it turns red); agent tab active in a
 focused window -> only ungrouped (a mutant without the guard turns it red, 11/11). Extension 0.4.0.6; needs a Reload in
 each profile.
 
