@@ -87,7 +87,9 @@ Todo arquivo do diff cai numa linha abaixo ou em "some".
 - Sessões `ia:*` (`--browser chromium --isolated --headless`): nada muda.
 - Pin do fallback `npx @playwright/mcp@0.0.83` → **`0.0.85`** (09/11, `playwright-core 1.66.0-alpha-2026-11-09`):
   fala o protocolo 2 da extensão e já traduz `Target.createTarget` em `chrome.tabs.create` (o que a extensão 0.5 exige);
-  é o mais perto da base nova sem ser posterior ao #44047.
+  é o mais perto da base nova sem ser posterior ao #44047. ⚠️ **Inferido** do código-fonte do fork velho e das
+  dependências publicadas, **não rodado** contra a extensão `0.5.0.3` (o fallback só roda enquanto o build local está
+  velho; se falhar, o efeito é a conexão falhar até o build terminar).
 
 ## Checagem D7 (roteamento)
 

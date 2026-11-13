@@ -95,6 +95,10 @@ Wrapper: `node scripts/run-mcp-server.test.cjs` → `27/27 passed`. Smoke com Ch
   specs de `tests/extension/`, que agora rodam no Windows. Sem teste ficaram: portador que não responde/atrasa/falha
   (os 3 casos de "volta para o chrome.exe"), relés conectando ao mesmo tempo (fila dos primeiros), espera de 15 s da
   revelação e duas revelações cruzadas na mesma janela. O código é o mesmo do fork velho, que tinha esses testes.
+- **`worker-death.spec.ts` não migrou como arquivo**: dos 4 casos, só "aba do agente fecha, a do usuário fica, a aba
+  na frente fica" vive em `tab-ownership.spec.ts:86`. Sem teste: o teto de 3 s da limpeza, "sem registro (worker de
+  versão velha) só solta" e a semente na página de conexão (no modelo novo a semente vira a aba em branco, que é
+  registrada como do agente).
 - **Tomada pelo usuário** (Cancelar na barra do depurador rebaixa a aba do agente para "do usuário") e **aba criada
   depois do fechamento**: implementadas, sem teste (o headless não tem barra do depurador; a corrida é difícil de
   provocar). Como no fork velho.

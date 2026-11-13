@@ -44,7 +44,7 @@ function startPages() {
   const server = http.createServer((req, res) => {
     const title = decodeURIComponent(req.url.slice(1).split('?')[0]) || 'root';
     const body = title === 'Cookies'
-      ? `<script>document.cookie = 'keep=1; max-age=3600'; document.cookie = 'drop=2; max-age=3600';</script>Page Cookies`
+      ? `<script>document.cookie = 'keep=1; max-age=3600'; document.cookie = 'drop=2; max-age=3600'; document.cookie = 'other=3; max-age=3600';</script>Page Cookies`
       : `Page ${title}`;
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(`<title>${title}</title><body>${body}</body>`);
@@ -191,12 +191,13 @@ async function main() {
     // 5. Cookies: apagar um funciona, limpar tudo é recusado.
     await call(b, 'browser_navigate', { url: urlOf('Cookies') });
     const del = await call(b, 'browser_cookie_delete', { name: 'drop' });
+    const delDomain = await call(b, 'browser_cookie_delete', { name: 'other', domain: '127.0.0.1' });
     const list = await call(b, 'browser_cookie_list');
     const clear = await call(b, 'browser_cookie_clear');
     const list2 = await call(b, 'browser_cookie_list');
-    check('5. browser_cookie_delete por nome funciona e browser_cookie_clear sem filtro é recusado',
-        !del.isError && !list.text.includes('drop') && list.text.includes('keep') && clear.isError && /Storage.clearCookies is not allowed/.test(clear.text) && list2.text.includes('keep'),
-        { apagar: del.text.slice(0, 120), limpar: clear.text.slice(0, 160) });
+    check('5. browser_cookie_delete (por nome e por domínio) funciona e browser_cookie_clear sem filtro é recusado',
+        !del.isError && !delDomain.isError && !list.text.includes('drop') && !list.text.includes('other') && list.text.includes('keep') && clear.isError && /Storage.clearCookies is not allowed/.test(clear.text) && list2.text.includes('keep'),
+        { apagar: del.text.slice(0, 120), apagarDominio: delDomain.text.slice(0, 160), limpar: clear.text.slice(0, 160) });
 
     await b.client.close();
   } finally {

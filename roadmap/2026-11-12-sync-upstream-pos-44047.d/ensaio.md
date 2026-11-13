@@ -38,7 +38,7 @@ env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN -u PLAYWRIGHT_MCP_EXTENSION -u PLAYWRIGHT_
 | 3a. print de aba escondida < 60 s, janela sem foco (revela e devolve) | VERDE | 140 ms, `revealed=true`, aba ativa depois `["Front"]` |
 | 3b. print de aba escondida < 60 s, janela com foco (não revela) | VERDE | 87 ms; `pw:mcp:shot screenshot viewport background=true timeout=60000 took 77ms ok` |
 | 4. desconectar fecha as abas do agente e solta as do usuário | VERDE | `A-main` e `A-sub` fechadas; `User-in-A` (arrastada pelo usuário para o grupo de A) ficou no grupo `Playwright · ensaio-A` cinza; `B-main` intacta |
-| 5. `browser_cookie_delete` por nome funciona; `browser_cookie_clear` sem filtro é recusado | VERDE | `clearCookies({ name: 'drop' })` sem erro e `drop` some da lista, `keep` fica; limpar: `Storage.clearCookies is not allowed: it changes the state of the browser, not of the tab` |
+| 5. `browser_cookie_delete` por nome e por domínio funciona; `browser_cookie_clear` sem filtro é recusado | VERDE | `clearCookies({ name: 'drop' })` e `clearCookies({ name: 'other', domain: '127.0.0.1' })` sem erro, os dois somem da lista, `keep` fica; limpar: `Storage.clearCookies is not allowed: it changes the state of the browser, not of the tab`. Depois da revisão: apagar só vale para cookie de um site onde o agente tem aba (apagar por nome um cookie que também existe em outro site é recusado com o nome do site; passar `domain` resolve) |
 | 6. smoke do wrapper (`scripts/run-mcp-server.smoke.cjs`) | VERDE | `smoke ok`; contraprova com `PLAYWRIGHT_MCP_SESSION_TEMP=0` → `smoke FAIL 4` (esperado) |
 
 Vermelho: nenhum. Rodado de novo depois das correções da revisão adversarial do diff (commits `46012581b` e

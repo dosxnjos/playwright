@@ -11,3 +11,5 @@ What it carries, how to sync with upstream, how the wrapper and extension work, 
 `PLAYWRIGHT_MCP_EXTENSION_TOKEN` first): **[FORK.md](FORK.md)**.
 Plans and history: `roadmap/`. Project memory (local to this machine): `C:\Dev\cerebro\projetos\playwright.md`.
 `npm run flint` covers `packages/extension/` since upstream #43072 (`npm run tsc` runs its two tsconfigs).
+The "Language" block of `AGENTS.md` (ASD-STE100) is upstream's maintainers' preference: it does not apply in this fork;
+the owner's own rules for replies win.
