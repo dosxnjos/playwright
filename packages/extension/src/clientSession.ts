@@ -82,7 +82,7 @@ export class ClientSession {
       }
       case 'chrome.debugger.sendCommand': {
         const [target, cdpMethod, cdpParams] = params;
-        checkCdpMethod(cdpMethod);
+        checkCdpMethod(cdpMethod, cdpParams);
         return await this._ownedTab(target).sendCommand(target.sessionId, cdpMethod, cdpParams);
       }
       case 'chrome.tabs.create': {

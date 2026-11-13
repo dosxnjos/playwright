@@ -30,7 +30,24 @@ const BROWSER_STATE_METHODS = new Set([
   'Target.activateTarget',
 ]);
 
-export function checkCdpMethod(method: string): void {
+export function checkCdpMethod(method: string, params?: unknown): void {
+  // Fork (FORK.md, patch 8): deleting some cookies is allowed, not planting or clearing them all.
+  if (method === 'Storage.setCookies' && onlyExpiredCookies(params))
+    return;
   if (BROWSER_STATE_METHODS.has(method))
     throw new Error(`${method} is not allowed: it changes the state of the browser, not of the tab`);
+}
+
+// Fork-only (patch 8). Playwright's clearCookies() with a filter (browser_cookie_delete) reads the cookies and sets the
+// matching ones again with `expires: 0`, through Storage.setCookies (server/browserContext.ts clearCookies). A call in
+// which every cookie is already expired can only delete. A missing `expires` or -1 is a session cookie: not expired.
+function onlyExpiredCookies(params: unknown): boolean {
+  const cookies = (params as { cookies?: unknown } | undefined)?.cookies;
+  if (!Array.isArray(cookies) || !cookies.length)
+    return false;
+  const now = Date.now() / 1000;
+  return cookies.every(cookie => {
+    const expires = (cookie as { expires?: unknown } | null)?.expires;
+    return typeof expires === 'number' && expires >= 0 && expires <= now;
+  });
 }
