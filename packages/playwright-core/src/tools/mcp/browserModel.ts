@@ -37,6 +37,11 @@ import type { DebuggerSession, ExtensionCommands, ExtensionEvent } from './proto
 
 const debugLogger = debug('pw:mcp:relay');
 
+// Fork (03/10/2026, "mostrar só sem plateia"): a revealed capture holds the next reveal of this process back until it
+// ends, at most this long (a capture that never answers must not stop every later screenshot). Tests shorten it.
+const revealHoldMs = () => +(process.env.PWTEST_EXTENSION_REVEAL_HOLD_MS ?? 15_000);
+let revealQueue: Promise<void> = Promise.resolve();
+
 export type CDPMessage = {
   id?: number;
   sessionId?: string;
@@ -114,7 +119,50 @@ export class BrowserModel {
           return {};
         break;
     }
-    return await this._extension.send('chrome.debugger.sendCommand', [this._debuggerTarget(method, sessionId), method, params]);
+    const target = this._debuggerTarget(method, sessionId);
+    // Fork: Chrome draws no frame for a hidden tab, so its capture waits (FORK.md § Foco zero, "Screenshot").
+    if (this._background && method === 'Page.captureScreenshot' && target.tabId !== undefined)
+      return await this._captureRevealed(target, params);
+    return await this._extension.send('chrome.debugger.sendCommand', [target, method, params]);
+  }
+
+  // Fork-only (03/10/2026, decided by the Gabriel: "mostrar só sem plateia"). The extension shows the tab inside its own
+  // window only when that window is not the focused one (nobody is looking), and never focuses a window; when it is,
+  // the capture goes on slowly (60 s ceiling, backend/screenshot.ts). The user's tab is put back even when the capture
+  // fails, and only if the revealed tab is still the active one. An extension without the command answers an error: the
+  // capture goes on as before. One reveal at a time in this process (see revealHoldMs).
+  private async _captureRevealed(target: DebuggerSession, params: any): Promise<any> {
+    const tabId = target.tabId!;
+    const earlier = revealQueue;
+    let release!: () => void;
+    const released = new Promise<void>(resolve => release = resolve);
+    revealQueue = earlier.then(() => released);
+    await earlier;
+    const reveal = await this._extension.send('extension.revealForCapture', [tabId]).catch(error => {
+      debugLogger('Capture without reveal:', error?.message);
+      return undefined;
+    });
+    const revealed = !!reveal?.revealed;
+    debugLogger(`Capture of tab ${tabId}: revealed=${revealed}`);
+    if (!revealed)
+      release();
+    let restoring: Promise<void> | undefined;
+    const restore = () => restoring ??= this._extension.send('extension.restoreAfterCapture', [tabId]).then(() => {}, error => debugLogger('Could not put the tab back after the capture:', error?.message));
+    // Review of 03/10: a capture still running when the hold runs out has its tab put back before the next reveal, which
+    // would otherwise record this agent's tab as the one to put back. The capture goes on without the reveal.
+    const hold = revealed ? setTimeout(() => {
+      debugLogger(`Capture of tab ${tabId} still running after ${revealHoldMs()} ms: putting the tab back`);
+      void restore().then(release);
+    }, revealHoldMs()) : undefined;
+    try {
+      return await this._extension.send('chrome.debugger.sendCommand', [target, 'Page.captureScreenshot', params]);
+    } finally {
+      if (revealed) {
+        clearTimeout(hold);
+        await restore();
+        release();
+      }
+    }
   }
 
   // Turn auto-attach on and attach to every tab we already know about.
@@ -225,6 +273,13 @@ export class BrowserModel {
     if (existing)
       return existing;
     await this._extension.send('chrome.debugger.attach', [{ tabId }, '1.3']);
+    // Fork (patch 7): a background tab gets no requestAnimationFrame, and the 'stable' check of click, hover and check
+    // polls on it. connectOverCDP with noDefaults skips focus emulation (crPage.ts), so turn it on per tab, before
+    // Playwright sees the target. Best effort: the attach stands either way.
+    if (this._background) {
+      await this._extension.send('chrome.debugger.sendCommand', [{ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }])
+          .catch(error => debugLogger('Could not turn focus emulation on:', error));
+    }
     const result = await this._extension.send('chrome.debugger.sendCommand', [{ tabId }, 'Target.getTargetInfo']);
     const targetInfo = result?.targetInfo;
     const sessionId = `pw-tab-${this._nextSessionId++}`;

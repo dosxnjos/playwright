@@ -24,6 +24,8 @@ import path from 'path';
 
 import debug from 'debug';
 
+import { relayScope } from '../backend/extensionSession';
+
 import type { CallToolRequest, CallToolResult, ClientInfo, ServerBackend, ServerBackendFactory, Tool } from '../utils/mcp/server';
 import type { FullConfig } from './config';
 
@@ -115,7 +117,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     const clientInfo = { ...this._clientInfo, clientName };
     const entry = { inFlight: 0 } as Entry;
     routerDebug(`create key=${key} clientName=${clientName}`);
-    const created = this._inner.create(clientInfo);
+    // Patch 7: a sub-agent's extension relay connects and opens tabs in the background (cdpRelay.ts, FORK.md § Foco zero).
+    const created = key === MAIN ? this._inner.create(clientInfo) : relayScope.run({ background: true }, () => this._inner.create(clientInfo));
     entry.promise = created.then(async backend => {
       await backend.initialize?.(clientInfo);
       // NEVER re-emit 'disconnected' upwards: the server would drop every agent, main included (server.ts).

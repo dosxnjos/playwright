@@ -49,7 +49,8 @@ export type SessionStatus = {
 export type PageMessage =
   | { type: 'connectionRequested', mcpRelayUrl: string }
   | { type: 'getCandidates' }
-  | { type: 'connect', options: SessionOptions, selection: Selection }
+  // Fork: `token` is true when the connect page connected with the token, without the user (foco zero).
+  | { type: 'connect', options: SessionOptions, selection: Selection, token?: boolean }
   | { type: 'keepalive' }
   | { type: 'getStatus' }
   | { type: 'disconnect', sessionId: number };

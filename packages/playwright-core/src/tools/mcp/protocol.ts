@@ -82,6 +82,16 @@ export type ExtensionCommands = {
     params: [label: string];
     result: { labeled: boolean };
   };
+  // Fork-only: show an owned tab for a capture when its window is not the focused one, then put the window's previous
+  // tab back (only if the revealed tab is still the active one). FORK.md § Foco zero.
+  'extension.revealForCapture': {
+    params: [tabId: number];
+    result: { revealed: boolean };
+  };
+  'extension.restoreAfterCapture': {
+    params: [tabId: number];
+    result: { restored: boolean };
+  };
 };
 
 // Events mirror chrome.<api>.<event>.addListener callback signatures.

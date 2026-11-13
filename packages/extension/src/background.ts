@@ -17,6 +17,7 @@
 
 import { ChromeListeners } from './chromeListeners';
 import { ConnectionBroker } from './connectionBroker';
+import { FocusMemory } from './focusMemory';
 import { TabGroupManager } from './tabGroupManager';
 import { TabPicker } from './tabPicker';
 import { TabRegistry } from './tabRegistry';
@@ -34,7 +35,9 @@ class Extension {
     const groups = new TabGroupManager(registry, listeners);
     this._ready = Promise.all([registry.ready, groups.ready]);
     this._picker = new TabPicker(registry, groups);
-    this._broker = new ConnectionBroker(registry, groups, this._picker, listeners);
+    // Fork (foco zero): always on, so the first connect page of a session knows the tab the user was on.
+    const focusMemory = new FocusMemory();
+    this._broker = new ConnectionBroker(registry, groups, this._picker, listeners, focusMemory);
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(() => void this._showManagePage());
   }
@@ -66,7 +69,7 @@ class Extension {
       case 'getCandidates':
         return await this._picker.candidates();
       case 'connect':
-        return await this._broker.connect(senderTabId!, message.options, message.selection);
+        return await this._broker.connect(senderTabId!, message.options, message.selection, !!message.token);
       case 'getStatus':
         return { sessions: this._broker.status() };
       case 'disconnect':

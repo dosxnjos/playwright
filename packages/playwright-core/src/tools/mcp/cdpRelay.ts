@@ -72,6 +72,7 @@ import { playwrightExtensionId } from '../utils/extension';
 import { logUnhandledError } from './log';
 import { BrowserModel } from './browserModel';
 import * as protocol from './protocol';
+import { relayScope } from '../backend/extensionSession';
 
 import type { CDPMessage } from './browserModel';
 import type { WebSocket } from 'ws';
@@ -80,6 +81,17 @@ import type { WebSocket } from 'ws';
 const debugLogger = debug('pw:mcp:relay');
 
 const extensionConnectionTimeout = +(process.env.PWTEST_EXTENSION_CONNECT_TIMEOUT ?? 30_000);
+
+// Fork-only (patch 7): relays whose extension finished its handshake. One of them opens the next relay's connect page
+// from inside Chrome, so that no browser start takes the user's window: Chrome older than 158 ignores
+// --open-in-background (FORK.md § Foco zero, "Carrier").
+const connectedRelays = new Set<CDPRelayServer>();
+// Relays opening their connect page right now, oldest first: a relay with no carrier waits for an older one.
+const connectingRelays = new Set<CDPRelayServer>();
+const silentConnect = () => process.env.PLAYWRIGHT_MCP_AGENT_SILENT !== 'off';
+const mainFocus = () => process.env.PLAYWRIGHT_MCP_FOCUS === 'on';
+// From the carrier's chrome.tabs.create to the connect page's WebSocket. Read per call: tests shorten it.
+const carrierTimeout = () => +(process.env.PWTEST_EXTENSION_CARRIER_TIMEOUT ?? 10_000);
 
 export type TabGroupOptions = {
   title?: string;
@@ -115,9 +127,14 @@ export class CDPRelayServer {
     this._executablePath = executablePath;
     this._customUserDataDir = customUserDataDir;
     this._profileDirectory = profileDirectory;
-    this._background = background;
     this._protocolVersion = parseInt(process.env.PWTEST_EXTENSION_PROTOCOL ?? protocol.VERSION.toString(), 10);
     this._token = process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+    // Fork (patch 7, foco zero): a sub-agent's relay is always in the background, and the main agent's too when a token
+    // connects it without a click, unless PLAYWRIGHT_MCP_FOCUS=on. Without a token the main agent's connect page has to
+    // stay in front: the user clicks Allow there. PLAYWRIGHT_MCP_AGENT_SILENT=off turns both off (--background stays).
+    const subAgent = !!relayScope.getStore()?.background && silentConnect();
+    this._background = background || subAgent || (silentConnect() && !!this._token && !mainFocus());
+    debugLogger(`Relay created, background=${this._background} subAgent=${subAgent}`);
 
     const uuid = crypto.randomUUID();
     this._cdpPath = `/cdp/${uuid}`;
@@ -157,19 +174,73 @@ export class CDPRelayServer {
 
   async establishExtensionConnection(clientName: string, tabGroup: TabGroupOptions | undefined) {
     debugLogger('Establishing extension connection');
-    await this._openConnectPageInBrowser(clientName, tabGroup);
-    debugLogger('Waiting for incoming extension connection');
-    // Without a token the user has to approve the connection in the browser, which can take arbitrarily long.
-    const deadline = this._token ? monotonicTime() + extensionConnectionTimeout : 0;
-    const { timedOut } = await raceAgainstDeadline(() => this._extensionReady, deadline);
-    if (timedOut) {
-      const profile = this._profileDirectory ? ` "${this._profileDirectory}"` : '';
-      throw new Error(`Playwright extension did not connect within ${extensionConnectionTimeout / 1000}s after opening the connect page. Make sure the extension is installed in the Chrome profile${profile} and PLAYWRIGHT_MCP_EXTENSION_TOKEN matches its token.`);
+    // Fork (patch 7): synchronous, before any await, so relays started in the same tick still get an order. A relay
+    // stays here until it connects or fails, so a younger one waits for it instead of starting the browser again.
+    const earlier = [...connectingRelays];
+    connectingRelays.add(this);
+    try {
+      await this._openConnectPageInBrowser(clientName, tabGroup, earlier);
+      debugLogger('Waiting for incoming extension connection');
+      // Without a token the user has to approve the connection in the browser, which can take arbitrarily long.
+      const deadline = this._token ? monotonicTime() + extensionConnectionTimeout : 0;
+      const { timedOut } = await raceAgainstDeadline(() => this._extensionReady, deadline);
+      if (timedOut) {
+        const profile = this._profileDirectory ? ` "${this._profileDirectory}"` : '';
+        throw new Error(`Playwright extension did not connect within ${extensionConnectionTimeout / 1000}s after opening the connect page. Make sure the extension is installed in the Chrome profile${profile} and PLAYWRIGHT_MCP_EXTENSION_TOKEN matches its token.`);
+      }
+      debugLogger('Extension connection established');
+    } finally {
+      connectingRelays.delete(this);
     }
-    debugLogger('Extension connection established');
   }
 
-  private async _openConnectPageInBrowser(clientName: string, tabGroup: TabGroupOptions | undefined) {
+  // Fork-only (patch 7): read by browser_take_screenshot (backend/extensionSession.ts) for its longer timeout.
+  get background(): boolean {
+    return this._background;
+  }
+
+  // Fork-only (patch 7, foco zero). Opens the connect page through a relay of this process that is already connected,
+  // in the background when this relay is (only with a token: without one the user has to see the page to click Allow).
+  // Returns false to fall back to the browser start: no carrier, a carrier that fails or does not answer, or (with a
+  // token) a page that does not connect in time, which is closed first, so that it does not race the started one.
+  private async _openConnectPageViaCarrier(href: string, earlier: CDPRelayServer[]): Promise<boolean> {
+    if (!silentConnect())
+      return false;
+    // No carrier yet: an older relay is starting the browser right now; wait for it rather than start a second one.
+    // Not without a token: that relay waits for a click, for as long as the user takes.
+    if (this._token && !CDPRelayServer._carriers().length)
+      await CDPRelayServer._waitForEarlierRelay(earlier);
+    const active = !(this._background && this._token);
+    for (const carrier of CDPRelayServer._carriers()) {
+      const deadline = monotonicTime() + carrierTimeout();
+      const created = carrier.sendToExtension('chrome.tabs.create', [{ url: href, active }]);
+      let tabId: number | undefined;
+      try {
+        const answer = await raceAgainstDeadline(() => created, deadline);
+        if (answer.timedOut) {
+          void created.then(tab => closeTab(carrier, tab?.id), () => {});
+          throw new Error(`no answer within ${carrierTimeout() / 1000}s`);
+        }
+        tabId = answer.result?.id;
+      } catch (error) {
+        debugLogger('A connected relay could not open the connect page:', error);
+        continue;
+      }
+      debugLogger(`Connect page opened via portador (a connected relay), active=${active}`);
+      if (!this._token)
+        return true;
+      // Swallowed: a relay stopped meanwhile rejects it, and establishExtensionConnection reports that.
+      await raceAgainstDeadline(() => this._extensionReady.catch(() => {}), deadline);
+      if (this._browser || this._extensionReady.isDone())
+        return true;
+      debugLogger(`Connect page opened via portador did not connect within ${carrierTimeout() / 1000}s: closing it, starting ${this._browserChannel}`);
+      closeTab(carrier, tabId);
+      return false;
+    }
+    return false;
+  }
+
+  private async _openConnectPageInBrowser(clientName: string, tabGroup: TabGroupOptions | undefined, earlier: CDPRelayServer[]) {
     const mcpRelayEndpoint = `${this._wsHost}${this._extensionPath}`;
     const url = new URL(`chrome-extension://${playwrightExtensionId}/connect.html`);
     url.searchParams.set('mcpRelayUrl', mcpRelayEndpoint);
@@ -191,6 +262,9 @@ export class CDPRelayServer {
     if (this._token)
       url.searchParams.set('token', this._token);
     const href = url.toString();
+    // Fork (patch 7): through a relay already connected in this process when there is one, so no browser start.
+    if (await this._openConnectPageViaCarrier(href, earlier))
+      return;
 
     const channel = registry.isChromiumAlias(this._browserChannel) ? 'chromium' : this._browserChannel;
     let executablePath = this._executablePath;
@@ -225,16 +299,46 @@ export class CDPRelayServer {
 
   // Fork-only: relabels this client's Chrome tab group (browser_set_group_label). False without grouping.
   async setGroupLabel(label: string): Promise<boolean> {
-    if (!this._browser)
-      throw new Error('Extension not connected');
-    const { labeled } = await this._browser.sendToExtension('extension.setGroupLabel', [label]);
+    const { labeled } = await this.sendToExtension('extension.setGroupLabel', [label]);
     return labeled;
   }
 
+  // Fork-only (patch 7).
+  private static _carriers(): CDPRelayServer[] {
+    return [...connectedRelays].filter(relay => !!relay._browser);
+  }
+
+  // Fork-only (patch 7): only relays registered before this one; waiting on later ones too, relays started together
+  // would wait on each other.
+  private static async _waitForEarlierRelay(earlier: CDPRelayServer[]) {
+    const pending = earlier.filter(relay => !relay._extensionReady.isDone());
+    if (!pending.length)
+      return;
+    debugLogger(`Waiting for ${pending.length} older relay(s) to connect before opening the connect page`);
+    let left = pending.length;
+    const anyConnected = new Promise<void>(resolve => {
+      for (const relay of pending) {
+        relay._extensionReady.then(resolve, () => {
+          if (--left === 0)
+            resolve();
+        });
+      }
+    });
+    await raceAgainstDeadline(() => anyConnected, monotonicTime() + extensionConnectionTimeout);
+  }
+
   stop(): void {
+    connectedRelays.delete(this);
     this._closeCDPConnection('Server stopped');
     this._closeExtensionConnection('Server stopped');
     void this._wsServer.close().catch(logUnhandledError);
+  }
+
+  // Fork-only (patch 7): a carrier sends extension commands that are not CDP (opening another relay's connect page).
+  sendToExtension<M extends keyof protocol.ExtensionCommands>(method: M, params: protocol.ExtensionCommands[M]['params']): Promise<protocol.ExtensionCommands[M]['result']> {
+    if (!this._browser)
+      return Promise.reject(new Error('Extension not connected'));
+    return this._browser.sendToExtension(method, params);
   }
 
   private _handleExtensionConnection(ws: WebSocket): void {
@@ -244,8 +348,13 @@ export class CDPRelayServer {
     }
     this._browser = new BrowserModel(ws, this._background, {
       sendToCDPClient: message => this._sendToCDPClient(message),
-      onInitialized: () => this._extensionReady.resolve(),
+      onInitialized: () => {
+        // Fork (patch 7): a carrier only after the handshake, like the CDP traffic.
+        connectedRelays.add(this);
+        this._extensionReady.resolve();
+      },
       onClose: reason => {
+        connectedRelays.delete(this);
         debugLogger('Extension WebSocket closed:', reason);
         if (!this._extensionReady.isDone())
           this._extensionReady.reject(new Error(`Extension disconnected before initialization: ${reason}`));
@@ -320,4 +429,10 @@ export class CDPRelayServer {
     debugLogger('→ Playwright:', `${message.method ?? `response(id=${message.id})`}`);
     this._cdpConnection?.send(JSON.stringify(message));
   }
+}
+
+// Fork-only (patch 7): closes a connect page a carrier opened. Best effort: the carrier may be gone already.
+function closeTab(carrier: CDPRelayServer, tabId: number | undefined) {
+  if (tabId !== undefined)
+    carrier.sendToExtension('chrome.tabs.remove', [tabId]).catch(error => debugLogger('Could not close the connect page:', error));
 }

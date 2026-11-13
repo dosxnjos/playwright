@@ -20,6 +20,15 @@ import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
 import type { ChromeListeners } from './chromeListeners';
 import type { ClientSession } from './clientSession';
 
+// Fork (FORK.md § Foco zero, "Popups"): Chrome's openerTabId names the tab that was ACTIVE when a popup opened, not the
+// tab that opened it, and the tab of a background client never is (measured in Chromium 1247 on 03/10/2026 and on the
+// extension 0.5.0 with Chromium 158 on 12/11/2026: tests/extension/popup-source.spec.ts). With the webNavigation
+// permission a popup is claimed from onCreatedNavigationTarget, whose sourceTabId is the real opener. Without it,
+// upstream's openerTabId path.
+function popupSourceEvents(): typeof chrome.webNavigation.onCreatedNavigationTarget | undefined {
+  return (globalThis as any).chrome?.webNavigation?.onCreatedNavigationTarget;
+}
+
 export class TabRegistry {
   readonly ready = detachDebuggersOfPreviousServiceWorker();
   private _tabs = new Map<number, OwnedTab>();
@@ -40,6 +49,9 @@ export class TabRegistry {
     listeners.add(chrome.debugger.onDetach, (source, reason) => {
       this._tabs.get(source.tabId!)?.didDetachDebugger(reason);
     });
+    const popupEvents = popupSourceEvents();
+    if (popupEvents)
+      listeners.add(popupEvents, details => void this._onPopupCreated(details));
   }
 
   // A reserved tab has no owner, and no client can claim it.
@@ -104,9 +116,32 @@ export class TabRegistry {
   }
 
   private _onTabCreated(tab: chrome.tabs.Tab): void {
+    // Fork: popups come from onCreatedNavigationTarget when it is there (see popupSourceEvents).
+    if (popupSourceEvents())
+      return;
     const opener = tab.openerTabId === undefined ? undefined : this.ownerOf(tab.openerTabId);
     if (opener)
       this.claim(tab, opener);
+  }
+
+  // Fork (FORK.md § Foco zero, "Popups"): a popup goes to the owner of the tab that opened it, the real source.
+  private async _onPopupCreated(details: chrome.webNavigation.WebNavigationSourceCallbackDetails): Promise<void> {
+    const owner = this.ownerOf(details.sourceTabId);
+    if (!owner)
+      return;
+    const tab = await chrome.tabs.get(details.tabId).catch(() => undefined);
+    if (!tab || this.ownerOf(details.sourceTabId) !== owner)
+      return;
+    // Chrome makes the popup active and names the tab that was active then as its openerTabId: for a background
+    // client, put that tab back. Not when it is the source itself: the user was looking at the tab of the client (to
+    // follow it, to log in), and the popup is what they see next. A popup in a window of its own still comes to the front.
+    if (owner.options.background && tab.active && tab.openerTabId !== undefined && tab.openerTabId !== tab.id && tab.openerTabId !== details.sourceTabId)
+      void chrome.tabs.update(tab.openerTabId, { active: true }).catch(() => {});
+    try {
+      this.claim({ ...tab, openerTabId: details.sourceTabId }, owner);
+    } catch {
+      // Another client took the tab meanwhile.
+    }
   }
 
   private _onTabRemoved(tabId: number, removeInfo: chrome.tabs.OnRemovedInfo): void {

@@ -18,7 +18,10 @@
 import { Channel } from './channel';
 import { ClientSession } from './clientSession';
 
+import { captureReveal } from './captureReveal';
+
 import type { ChromeListeners } from './chromeListeners';
+import type { FocusMemory } from './focusMemory';
 import type { TabGroupManager } from './tabGroupManager';
 import type { TabPicker } from './tabPicker';
 import type { TabRegistry } from './tabRegistry';
@@ -36,11 +39,14 @@ export class ConnectionBroker {
   private _lastSessionId = 0;
   private _keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(registry: TabRegistry, groups: TabGroupManager, picker: TabPicker, listeners: ChromeListeners) {
+  private _focusMemory: FocusMemory | undefined;
+
+  constructor(registry: TabRegistry, groups: TabGroupManager, picker: TabPicker, listeners: ChromeListeners, focusMemory?: FocusMemory) {
     this._registry = registry;
     this._groups = groups;
     this._picker = picker;
     this._listeners = listeners;
+    this._focusMemory = focusMemory;
     listeners.add(chrome.tabs.onRemoved, tabId => {
       this._relayUrls.delete(tabId);
       this._didChangeActivity();
@@ -55,7 +61,7 @@ export class ConnectionBroker {
     await this._groups.ungroup(connectTabId);
   }
 
-  async connect(connectTabId: number, options: SessionOptions, selection: Selection): Promise<void> {
+  async connect(connectTabId: number, options: SessionOptions, selection: Selection, token = false): Promise<void> {
     const relayUrl = this._relayUrls.get(connectTabId);
     if (!relayUrl)
       throw new Error('Pending client connection closed');
@@ -74,8 +80,7 @@ export class ConnectionBroker {
     session.onClose = () => {
       this._sessions.delete(sessionId);
       this._didChangeActivity();
-      void this._registry.releaseAll(session);
-      void this._groups.orphan(session);
+      void this._closeSession(session);
     };
 
     try {
@@ -83,6 +88,10 @@ export class ConnectionBroker {
       const tabs = await this._picker.apply(selection, session, connectTabId);
       session.didInitialize();
       await this._show(tabs, connectTabId, options.background);
+      // Fork (foco zero): Chrome older than 158 opens the first connect page of a session in front, in spite of
+      // --open-in-background. A background client that connected with the token puts back the tab the user was on.
+      if (options.background && token)
+        await this._focusMemory?.putBack(connectTabId);
     } catch (error: any) {
       session.close(error.message);
       throw error;
@@ -99,6 +108,15 @@ export class ConnectionBroker {
       clientName: session.options.clientName,
       tabIds: this._registry.tabIdsOf(session),
     }));
+  }
+
+  private async _closeSession(session: ClientSession): Promise<void> {
+    // Fork (reveal for capture): the client went away during a revealed capture and will never ask for the restore.
+    // Put the user's tab back first, before the tabs of the client go.
+    if (captureReveal.hasPending(session))
+      await captureReveal.restoreAll(session);
+    await this._registry.releaseAll(session);
+    await this._groups.orphan(session);
   }
 
   private _didChangeActivity(): void {

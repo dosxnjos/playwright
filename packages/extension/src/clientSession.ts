@@ -15,6 +15,7 @@
  */
 
 
+import { captureReveal } from './captureReveal';
 import { checkCdpMethod } from './cdpPolicy';
 
 import type { Channel } from './channel';
@@ -26,6 +27,7 @@ export class ClientSession {
   readonly options: SessionOptions;
   private _channel: Channel;
   private _registry: TabRegistry;
+  private _carriedConnectPages = new Set<number>();
 
   onClose?: () => void;
   // Fork-only: browser_set_group_label. Wired by ConnectionBroker to TabGroupManager. False without grouping.
@@ -86,6 +88,12 @@ export class ClientSession {
       case 'chrome.tabs.create': {
         const [{ url, active }] = params;
         const tab = await chrome.tabs.create({ url, active });
+        // Fork (foco zero, carrier): a connected client opens the connect page of another client of its process, so
+        // that no browser start takes the window of the user. That page is reserved, never this client's tab.
+        if (typeof url === 'string' && url.startsWith(chrome.runtime.getURL('connect.html'))) {
+          this._carriedConnectPages.add(tab.id!);
+          return tab;
+        }
         // The response announces the tab to the client.
         if (!this._channel.closed)
           this._registry.claim(tab, this, { announce: false });
@@ -93,9 +101,22 @@ export class ClientSession {
       }
       case 'chrome.tabs.remove': {
         const tabIds = [params[0]].flat() as number[];
-        for (const tabId of tabIds)
-          this._ownedTab({ tabId });
+        for (const tabId of tabIds) {
+          // Fork (carrier): a connect page this client opened, that did not connect in time.
+          if (!this._carriedConnectPages.delete(tabId))
+            this._ownedTab({ tabId });
+        }
         return await chrome.tabs.remove(tabIds);
+      }
+      // Fork (reveal for capture, FORK.md § Foco zero): only a tab that this client owns.
+      case 'extension.revealForCapture': {
+        const [tabId] = params;
+        this._ownedTab({ tabId });
+        return await captureReveal.reveal(tabId, this);
+      }
+      case 'extension.restoreAfterCapture': {
+        const [tabId] = params;
+        return await captureReveal.restore(tabId, this);
       }
       case 'extension.setGroupLabel': {
         const [label] = params;

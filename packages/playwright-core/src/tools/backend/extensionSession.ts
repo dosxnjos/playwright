@@ -14,12 +14,21 @@
  * limitations under the License.
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
+
+// Fork-only (patch 7). Set by the agent router around a sub-agent's backend creation, read where the extension relay
+// is built: a background relay opens its connect page and its tabs without taking the user's window
+// (FORK.md § Foco zero).
+export const relayScope = new AsyncLocalStorage<{ background: boolean }>();
+
 // Fork-only. Lets tools reach the extension relay of the browser they run on
 // (session-level commands such as browser_set_group_label) without threading it
 // through browserFactory/program/BrowserBackend, which upstream keeps rewriting.
 export interface ExtensionSessionRelay {
   // Returns false when the client has no tab group (--no-tab-group).
   setGroupLabel(label: string): Promise<boolean>;
+  // Patch 7: a relay whose tabs are never shown; browser_take_screenshot gives it a longer timeout.
+  readonly background: boolean;
 }
 
 const relays = new WeakMap<object, ExtensionSessionRelay>();

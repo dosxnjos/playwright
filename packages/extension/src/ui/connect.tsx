@@ -70,9 +70,9 @@ const ConnectApp: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidates | null>(null);
   const [selection, setSelection] = useState<Selection>({});
 
-  const connect = useCallback(async (selection: Selection) => {
+  const connect = useCallback(async (selection: Selection, token = false) => {
     setCandidates(null);
-    const response = await chrome.runtime.sendMessage<PageMessage>({ type: 'connect', options, selection }).catch(e => ({ error: String(e) }));
+    const response = await chrome.runtime.sendMessage<PageMessage>({ type: 'connect', options, selection, token }).catch(e => ({ error: String(e) }));
     if (response?.success)
       setStatus({ type: 'connected', message: `"${options.clientName}" connected.` });
     else
@@ -105,7 +105,7 @@ const ConnectApp: React.FC = () => {
       url.searchParams.delete('token');
       window.history.replaceState(null, '', url);
       if (token === getOrCreateAuthToken())
-        await connect({});
+        await connect({}, true);
       else
         setStatus({ type: 'error', message: 'Invalid token provided.' });
     };

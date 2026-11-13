@@ -56,7 +56,8 @@ function openTab() {
   ws.onopen = () => ws.send(JSON.stringify({
     id: 1,
     method: 'Target.createTarget',
-    params: { url, background: args.includes('--open-in-background') },
+    // Fork: PWTEST_CHROME_STUB_FOREGROUND plays Chrome older than 158, which ignores --open-in-background.
+    params: { url, background: args.includes('--open-in-background') && !process.env.PWTEST_CHROME_STUB_FOREGROUND },
   }));
   ws.onmessage = () => ws.close();
 }
