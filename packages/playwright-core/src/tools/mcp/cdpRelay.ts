@@ -213,7 +213,9 @@ export class CDPRelayServer {
     if (this._background && this._token)
       args.push('--open-in-background');
     args.push(href);
-    spawn(executablePath, args, {
+    // Fork: Windows cannot start a .js file, and the Chrome stub of tests/extension is one: run it with node.
+    const [command, commandArgs] = executablePath.endsWith('.js') ? [process.execPath, [executablePath, ...args]] : [executablePath, args];
+    spawn(command, commandArgs, {
       windowsHide: true,
       detached: true,
       shell: false,
