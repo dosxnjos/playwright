@@ -99,3 +99,23 @@ Wrapper: `node scripts/run-mcp-server.test.cjs` → `27/27 passed`. Smoke com Ch
 - **Mutantes**: um só, no guarda "aba do agente na frente da janela com foco não fecha quando o worker morre"
   (`agentTabs.ts`, condição trocada por `false`): `tab-ownership.spec.ts:86` ficou vermelho 3/3 (`Alpha` fechada);
   restaurado, 3/3 verde. A origem do popup já tinha sido "mutada" de graça: o upstream puro deixava os testes vermelhos.
+
+## Revisão adversarial do diff (subagente sem contexto, 13/11)
+
+1 bloqueante, 7 "deveria corrigir", 5 detalhes. Tratamento (commit de correções depois de `a53e9d028`):
+
+| # | achado | tratamento |
+| --- | --- | --- |
+| 1 (bloqueante) | o portador podia fechar a página de conexão depois que ela virou a aba em branco de outro cliente (passava pela exceção sem checar dono) | corrigido: a exceção só vale enquanto **nenhum** cliente é dono da aba; teste novo `focus-zero.spec.ts` "a carrier cannot close the connect page it opened once a client owns it" |
+| 2 | `FocusMemory` acorda o worker a cada troca de aba do usuário (o upstream evita isso) | **mantido de propósito** (sem isso o "devolver a aba" do Chrome 157 não sabe qual era a aba); custo registrado aqui e vai para o `FORK.md` na Fase 5. Some quando o Chrome do Gabriel chegar no 158 e o `--open-in-background` funcionar |
+| 3 | popup de uma aba do usuário era marcado como do agente (fechava ao sair) | corrigido: o popup herda a origem da aba que o abriu; e o `claim` que chega depois de outro caminho também marca. Teste novo em `tab-ownership.spec.ts:80` |
+| 4 | o fechamento normal não poupava a aba na frente do usuário (código 2FA) | corrigido: a aba ativa de janela com foco vira do usuário e fica (mesmo guarda do worker morto). Mesmo teste |
+| 5 | um Cancelar na barra do depurador rebaixa todas as abas do agente (todas desanexam com `canceled_by_user`) | **aceito e registrado**: é o mesmo comportamento do fork velho; o usuário cancelou o controle, deixar as abas abertas é o lado seguro |
+| 6 | "não limpar tudo" não era garantido: lendo todos os cookies e vencendo um a um dava para deslogar de tudo; `Network.setCookie(s)`/`deleteCookies` não estavam recusados | corrigido: cookie vencido só passa se for de um site onde o cliente tem aba (`cookieSitesOutside`); os três métodos `Network.*` de cookie recusados (o Playwright não os usa). Testes em `cookies.spec.ts` |
+| 7 | revelação sem prazo: uma resposta que nunca chega travava todo print em segundo plano do processo | corrigido: revelar e devolver têm prazo de 5 s (`withDeadline`) |
+| 8 | testes que passariam com a função quebrada (subagente em segundo plano mascarado pelo token do principal; metade servidor da revelação sem teste) | corrigido: o teste do subagente roda com `PLAYWRIGHT_MCP_FOCUS=on` no principal e confere o log do portador; o mesmo teste tira print do subagente com a janela sem foco e confere `revealed=true` vindo do servidor |
+| 9 | passos do fechamento em sequência sem `finally`; registro esquecido antes de fechar | corrigido: `try/finally` em `_closeSession`; o registro sai depois do fechamento |
+| 10 | dedup compara com o título padrão de um grupo adotado | detalhe, fica |
+| 11 | aba em branco sem token marcada como do agente | **intencional** (o fork velho fazia igual: sem aba escolhida, a semente é do agente) |
+| 12 | comentário "uma por vez" com `Promise.all`; `design.md` sem os comandos do fork | comentário corrigido; `design.md`/`FORK.md` na Fase 5 |
+| 13 | um listener de `exit` por roteador (aviso de MaxListeners no modo HTTP) | corrigido: um listener por processo |
