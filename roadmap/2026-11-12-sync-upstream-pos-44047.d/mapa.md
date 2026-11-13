@@ -38,7 +38,7 @@ Todo arquivo do diff cai numa linha abaixo ou em "some".
 | 3 | abas criadas pelo agente **fecham** ao desconectar; abas do usuário só soltam | `extension/src/{connectedTabGroup,background}.ts` (`TabOwner`, `_pendingOwner`, `_onConnectionClose`) | `ownedTab.ts` (origem da aba), `clientSession.ts` e `tabRegistry.ts` (os três lugares que reivindicam aba para o cliente: `chrome.tabs.create`, popup, aba em branco do token), `connectionBroker.ts` (`onClose` fecha as do agente antes do `releaseAll`) | o oposto por desenho: grupo cinza retomável (#44047) | **redesenha** (D3) |
 | 3b | morte do service worker: o worker seguinte fecha as abas do agente (registro em `chrome.storage.session`), menos a aba ativa da janela com foco; limpeza com teto de 3 s | `connectedTabGroup.ts` (`cleanupStalePlaywrightGroups`), `background.ts` (`Promise.race` 3 s), `tests/extension/worker-death.spec.ts`, manifest `0.4.0.6` | registro ao lado do `clientGroupIds` (`tabGroupManager.ts`); limpeza no `ready` do `Extension` (`background.ts`), que já segura as mensagens até acabar | só deixa o grupo cinza e solta os debuggers (#44047 `_orphanGroupsOfPreviousServiceWorker`, `detachDebuggersOfPreviousServiceWorker`) | **redesenha** junto do 3 |
 | 8 | apagar cookie de um domínio no modo extensão | (novo) | `extension/src/cdpPolicy.ts` + `clientSession.ts` (a política passa a ver os parâmetros) | o upstream recusa `Storage.setCookies` inteiro (#44047); o `clearCookies(filtro)` expira com `expires: 0` via `addCookies` (`server/browserContext.ts:313`) | **novo** (D4) |
-| 4 | tema escuro e UI redesenhada, manifest `0.4.0.x` | `extension/src/ui/{connect.css,authToken.css,copyToClipboard.css,connect.tsx,tabItem.tsx}` | `connect.css` e `status.tsx` sumiram; UI nova em `ui/{common,colors}.css`, `ui/manage.tsx` | nada (recusado, #41841); a UI nova não tem `prefers-color-scheme` | **adiado** (D6): fica para o fim, provavelmente fora |
+| 4 | tema escuro e UI redesenhada, manifest `0.4.0.x` | `extension/src/ui/{connect.css,authToken.css,copyToClipboard.css,connect.tsx,tabItem.tsx}` | `connect.css` e `status.tsx` sumiram; UI nova em `ui/{common,colors}.css`, `ui/manage.tsx` | tema escuro **sim**: a UI nova segue o sistema (`ui/colors.css:457` `prefers-color-scheme: dark`, `ui/common.css:18`; corrigido pela revisão, a 1ª versão deste mapa dizia o contrário); o visual próprio do fork, não (recusado, #41841) | **some** (tema escuro) + **adiado** (visual próprio, D6) |
 
 ### Patch 7 por pedaço
 
@@ -103,3 +103,29 @@ Nenhum commit do intervalo emite progresso em chamada longa nem muda o teto de 1
 (chamada > 120 s derruba o servidor de todos) continua de pé. A hipótese 2 (extensão presa ao relé velho) muda de
 cara: o worker novo deixa os grupos cinza e solta os debuggers no início; o patch 3b fecha as abas dos agentes.
 Hipótese 3 (print lento) continua: é o que a revelação e o teto de 60 s tratam.
+
+## Revisão adversarial (subagente sem contexto, 12/11) e o que mudou no mapa
+
+15 achados, nenhum bloqueante sozinho. Como cada um foi tratado:
+
+| # | achado | tratamento |
+| --- | --- | --- |
+| 1 | portador: no modelo novo o `chrome.tabs.create` reivindica a página para o portador; o `connectionRequested` a reserva e solta; o portador perde o direito de fechar uma página que não conectou (token inválido vira sobra escondida); corrida `claim` × `reserve` | **redesenhado**: `ClientSession` não reivindica uma `chrome.tabs.create` cuja URL é o `connect.html` da extensão e guarda o id; só esse id pode ser fechado pelo portador sem ser dono. Sem grupo do portador, sem `onDetach`, sem corrida |
+| 2 | `FocusMemory` não enxerga nada com os listeners do upstream (ligados só com sessão ou página pendente); `background=true` vai até sem token | `FocusMemory` com listeners próprios, sempre ligados (custo: o worker acorda a cada troca de aba, como no fork velho); a página de conexão manda `token: true` no `connect` e o "devolver" só vale com `background` **e** token |
+| 3 | o teto de 3 s da limpeza do worker morto sumiria se a limpeza entrasse no `ready` | patch 3b mantém o teto (a limpeza das abas do agente corre ao lado, com `Promise.race` de 3 s) |
+| 4 | tomada pelo usuário (Cancelar na barra do depurador) e aba criada depois do fechamento | patch 3: `onDetach` com motivo ≠ `target_closed` rebaixa a aba para "do usuário"; `chrome.tabs.create` que volta com o canal fechado fecha a aba |
+| 5 | testes do upstream esperam a aba em branco do token sobrevivendo num grupo cinza (`client-lifecycle.spec.ts:76`, `:198`, `:256`) | patch 3 edita esses testes de forma explícita (D3) e diz no commit |
+| 6 | **a UI nova já tem tema escuro** (`ui/colors.css:457` `@media (prefers-color-scheme: dark)`, `ui/common.css:18` `color-scheme: light dark`) | patch 4: a parte "tema escuro" **some**; sobra só o visual próprio do fork, **adiado** (D6) |
+| 7 | o servidor stdio deixou de chamar `dispose` no fim do stdin (#43174): a pasta de sessão do roteador ficava | confirmado (`agent-routing.spec.ts:214` vermelho 3/3); corrigido em `b993885b4` (a pasta sai no `exit` do processo) |
+| 8 | o texto do `browser_close` só é verdade com o patch 3 | fica; vale depois do patch 3 (D3) |
+| 9 | a metade servidor da revelação não estava no mapa | vai para `BrowserModel.handleCDPCommand` (`_captureRevealed`, fila por processo e espera de 15 s); a metade extensão (`captureReveal.ts`, estado por janela) igual |
+| 10 | `--session-color` também é global por servidor | registrar no `FORK.md` junto do `--session-name` |
+| 11 | deduplicação do rótulo | refeita em `TabGroupManager.setLabel` (" (2)", " (3)") |
+| 12 | keepalive de 20 s do upstream deixa a morte do worker mais rara; cliente que fecha a última aba continua conectado | registrar no `FORK.md` (Fase 5); a limitação "fechar a última aba fecha a conexão" sai |
+| 13 | a linha "do upstream" da tabela "Outros arquivos" cita arquivos fora do diff; faltam `triage_*.yml` | corrigido abaixo: `triage_linux/mac/win.yml` o upstream já apagou |
+| 14 | o fallback `0.0.85` é anterior ao #44047 e não esquece a aba no `onDetach` | baixo impacto (só roda enquanto o build local está velho); fica registrado |
+| 15 | o upstream tira o token da URL só depois do `connectionRequested`; páginas com erro mantêm o token na URL | nenhuma dessas páginas é aba de cliente, o token não volta em resposta de tool; fica como está |
+
+Correção da tabela "Outros arquivos": `.claude/skills/...`, `docs/src/getting-started-*.md`, `utils/render_release_notes.mjs` e
+`.azure-pipelines/` **não** estão no diff do fork (erro de leitura deste mapa); `triage_{linux,mac,win}.yml` estavam
+apagados no fork e o upstream também já não os tem.
