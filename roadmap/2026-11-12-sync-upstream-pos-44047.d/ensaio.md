@@ -41,7 +41,8 @@ env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN -u PLAYWRIGHT_MCP_EXTENSION -u PLAYWRIGHT_
 | 5. `browser_cookie_delete` por nome funciona; `browser_cookie_clear` sem filtro é recusado | VERDE | `clearCookies({ name: 'drop' })` sem erro e `drop` some da lista, `keep` fica; limpar: `Storage.clearCookies is not allowed: it changes the state of the browser, not of the tab` |
 | 6. smoke do wrapper (`scripts/run-mcp-server.smoke.cjs`) | VERDE | `smoke ok`; contraprova com `PLAYWRIGHT_MCP_SESSION_TEMP=0` → `smoke FAIL 4` (esperado) |
 
-Vermelho: nenhum.
+Vermelho: nenhum. Rodado de novo depois das correções da revisão adversarial do diff (commits `46012581b` e
+`4a58ac010`): os 8 itens verdes outra vez (3a: 151 ms com `revealed=true`; 3b: 87 ms), `smoke ok`, `27/27 passed`.
 
 ## O que o ensaio não prova (levar para a Fase 4)
 

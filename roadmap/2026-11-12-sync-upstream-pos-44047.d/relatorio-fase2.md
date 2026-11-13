@@ -51,11 +51,11 @@ saída, código 0.
 `generate_channels` 0; snippets 0; `check-dependency-age` 0; `doc` 1 = ambiente (`firefox-1578\firefox.exe` não
 instalado, igual ao `FORK.md`).
 
-Extensão (`npm run test-extension`, headless, Windows), na ponta da branch:
+Extensão (`npm run test-extension`, headless, Windows), na ponta da branch (depois das correções da revisão):
 
 ```
   6 failed
-  92 passed (2.1m)
+  94 passed (2.4m)
 ```
 
 Os 6 vermelhos, todos de ambiente e todos vermelhos também na linha de base (upstream puro + correção do stub,
@@ -64,17 +64,19 @@ Os 6 vermelhos, todos de ambiente e todos vermelhos também na linha de base (up
 `tab-dragging.spec.ts:35`, `tab-management.spec.ts:123` (título de `chrome://version` em português:
 `"Sobre a versão"` em vez de `"About Version"`).
 
-Specs do fork no harness novo (todos verdes): `group-label` (3), `popup-source` (3), `focus-zero` (5),
-`capture-reveal` (4), `tab-ownership` (6), `cookies` (2).
+Specs do fork no harness novo (todos verdes): `group-label` (3), `popup-source` (3), `focus-zero` (6),
+`capture-reveal` (4), `tab-ownership` (7), `cookies` (2). Upstream intocado: os specs dele rodam com
+`PLAYWRIGHT_MCP_AGENT_TABS=keep` que o `harness.ts` liga por padrão.
 
 - `popup-source` mediu antes de refazer: na extensão do upstream puro os 2 testes de popup de aba em segundo plano
   ficavam vermelhos (`['Opener']` em vez de `['Opener','Opened']`), o que confirmou que o `openerTabId` ainda aponta
   a aba ativa no Chromium 158.
 
-MCP (`npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent screenshot`):
+MCP (`npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent screenshot cookies`, estado
+final):
 
 ```
-  104 passed (1.3m)
+  121 passed (1.6m)
 ```
 
 `agent-routing.spec.ts:214` ficou vermelho 1 vez numa rodada com 7 workers em paralelo com outra suíte e passou 4/4
