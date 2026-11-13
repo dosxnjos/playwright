@@ -41,6 +41,16 @@ const debugLogger = debug('pw:mcp:relay');
 // ends, at most this long (a capture that never answers must not stop every later screenshot). Tests shorten it.
 const revealHoldMs = () => +(process.env.PWTEST_EXTENSION_REVEAL_HOLD_MS ?? 15_000);
 let revealQueue: Promise<void> = Promise.resolve();
+// Fork: how long a reveal or a restore may take to answer before the capture goes on without it.
+const revealAnswerMs = 5000;
+
+function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
 
 export type CDPMessage = {
   id?: number;
@@ -138,7 +148,8 @@ export class BrowserModel {
     const released = new Promise<void>(resolve => release = resolve);
     revealQueue = earlier.then(() => released);
     await earlier;
-    const reveal = await this._extension.send('extension.revealForCapture', [tabId]).catch(error => {
+    // Review of 12/11: an extension that never answers must not hold every later capture of this process.
+    const reveal = await withDeadline(this._extension.send('extension.revealForCapture', [tabId]), revealAnswerMs).catch(error => {
       debugLogger('Capture without reveal:', error?.message);
       return undefined;
     });
@@ -147,7 +158,7 @@ export class BrowserModel {
     if (!revealed)
       release();
     let restoring: Promise<void> | undefined;
-    const restore = () => restoring ??= this._extension.send('extension.restoreAfterCapture', [tabId]).then(() => {}, error => debugLogger('Could not put the tab back after the capture:', error?.message));
+    const restore = () => restoring ??= withDeadline(this._extension.send('extension.restoreAfterCapture', [tabId]), revealAnswerMs).then(() => {}, error => debugLogger('Could not put the tab back after the capture:', error?.message));
     // Review of 03/10: a capture still running when the hold runs out has its tab put back before the next reveal, which
     // would otherwise record this agent's tab as the one to put back. The capture goes on without the reveal.
     const hold = revealed ? setTimeout(() => {

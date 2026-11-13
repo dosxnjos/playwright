@@ -33,9 +33,12 @@ const routerDebug = debug('pw:mcp:router');
 
 const MAIN = 'main';
 const ID = /^[\w-]{1,64}$/;
-// Tab group colors repeat from the 9th group on (extension/src/connectedTabGroup.ts): warn, never cap.
+// Tab group colors repeat from the 9th group on (extension/src/tabGroupManager.ts): warn, never cap.
 const WARN_AFTER = 8;
 const SWEEP_MS = 5000;
+// Routers whose session folders go on process exit (see _watch).
+const routersWithSessions = new Set<AgentRouter>();
+let exitListener: (() => void) | undefined;
 
 export function agentRoutingEnabled(config: FullConfig): boolean {
   if (process.env.PLAYWRIGHT_MCP_AGENT_ROUTING === 'off')
@@ -148,12 +151,16 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     this._sweepTimer ??= setInterval(() => this._sweep(), SWEEP_MS).unref();
     // On stdio the server no longer disposes the backend when stdin ends (upstream 12/11: the exit watchdog closes the
     // browsers and exits), so the session folder also goes on process exit.
-    if (this._sessions.size === 1)
-      process.once('exit', this._removeSessionDirs);
+    // One process listener for every router (the HTTP mode has a router per client).
+    routersWithSessions.add(this);
+    if (!exitListener) {
+      exitListener = () => [...routersWithSessions].forEach(router => router._removeSessionDirs());
+      process.once('exit', exitListener);
+    }
   }
 
-  private _removeSessionDirs = () => {
-    process.off('exit', this._removeSessionDirs);
+  _removeSessionDirs() {
+    routersWithSessions.delete(this);
     for (const sessao of this._sessions) {
       try {
         fs.rmSync(path.join(this._releaseRoot, sessao), { recursive: true, force: true });
@@ -163,7 +170,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
       }
     }
     this._sessions.clear();
-  };
+  }
 
   private _ensureSessionDir(sessao: string) {
     try {
