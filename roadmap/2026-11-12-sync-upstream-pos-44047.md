@@ -88,6 +88,11 @@ Relatório em `<sidecar>/ensaio.md`.
 
 ### Fase 4: virada (só com a Fase 3 verde)
 
+- Ordem do Gabriel (12/11): "você pode até atualizar, mas não implementa de primeira, porque tem outros agentes que
+  podem estar usando o playwright atual". Por isso a virada só acontece com **zero servidores MCP rodando do
+  checkout**: conferir na hora com
+  `powershell -c "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ? CommandLine -match 'run-mcp-server|entry[\\/]mcp' | select ProcessId,CommandLine"`
+  (lista vazia) e com o mapa de conversas abertas; havendo algum, esperar e vigiar, nunca derrubar processo alheio.
 - Janela: noite (22h–7h), com nenhuma conversa usando o navegador. A pré-venda do Unclick vai de 13/11 a 02/12 e
   as conversas dependem do navegador; virada falha de dia custa caro.
 - Passos: tag D-0 (`fork-pre-sync-2026-11`); `git reset --keep sync-2026-11` no checkout real (só se `roadmap/`
