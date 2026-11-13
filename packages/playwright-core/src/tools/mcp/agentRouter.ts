@@ -143,7 +143,24 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     this._sessions.add(sessao);
     this._ensureSessionDir(sessao);
     this._sweepTimer ??= setInterval(() => this._sweep(), SWEEP_MS).unref();
+    // On stdio the server no longer disposes the backend when stdin ends (upstream 12/11: the exit watchdog closes the
+    // browsers and exits), so the session folder also goes on process exit.
+    if (this._sessions.size === 1)
+      process.once('exit', this._removeSessionDirs);
   }
+
+  private _removeSessionDirs = () => {
+    process.off('exit', this._removeSessionDirs);
+    for (const sessao of this._sessions) {
+      try {
+        fs.rmSync(path.join(this._releaseRoot, sessao), { recursive: true, force: true });
+      } catch (e) {
+        // A leftover folder is harmless (empty markers); never let it keep the backends alive.
+        routerDebug(`release dir for ${sessao}: ${e}`);
+      }
+    }
+    this._sessions.clear();
+  };
 
   private _ensureSessionDir(sessao: string) {
     try {
@@ -201,15 +218,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     // Synchronous and first: on stdio the client kills the process soon after closing stdin.
     clearInterval(this._sweepTimer);
     this._sweepTimer = undefined;
-    for (const sessao of this._sessions) {
-      try {
-        fs.rmSync(path.join(this._releaseRoot, sessao), { recursive: true, force: true });
-      } catch (e) {
-        // A leftover folder is harmless (empty markers); never let it keep the backends alive.
-        routerDebug(`release dir for ${sessao}: ${e}`);
-      }
-    }
-    this._sessions.clear();
+    this._removeSessionDirs();
     const entries = [...this._entries.values()];
     this._entries.clear();
     this._main = undefined;
