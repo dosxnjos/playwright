@@ -34,6 +34,8 @@ export { generateHelp, generateHelpJSON, generateReadme } from './cli-daemon/hel
 export { decorateProgram as decorateCliDaemonProgram, initWorkspace } from './cli-daemon/program';
 export { allSkills, installSkills } from './utils/installSkills';
 export { openDashboardApp, openDashboardForContext } from './dashboard/dashboardApp';
+// Fork-only (patch 6): exported for tests/mcp/agent-routing.spec.ts.
+export { withAgentRouting } from './mcp/agentRouter';
 
 export type { ContextConfig } from './backend/context';
 export type { CallToolRequest, CallToolResult, Tool } from './backend/tool';
