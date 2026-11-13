@@ -36,7 +36,7 @@ const ENTRY = path.join(ROOT, 'packages', 'playwright-core', 'lib', 'entry', 'mc
 const STAMP_FILE = path.join(__dirname, '.build-stamp');
 const LOCK_DIR = path.join(__dirname, '.build-lock');
 
-const NPX_FALLBACK_ARGS = ['-y', '@playwright/mcp@0.0.83'];
+const NPX_FALLBACK_ARGS = ['-y', '@playwright/mcp@0.0.85'];
 
 function log(message) {
   process.stderr.write(`[run-mcp-server] ${message}\n`);
