@@ -16,10 +16,9 @@
 
 
 import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
-
-import type { ChromeListeners } from './chromeListeners';
 import { closeTabs, forgetAgentTabs, recordAgentTab } from './agentTabs';
 
+import type { ChromeListeners } from './chromeListeners';
 import type { ClientSession } from './clientSession';
 
 // Fork (FORK.md § Foco zero, "Popups"): Chrome's openerTabId names the tab that was ACTIVE when a popup opened, not the
