@@ -26,6 +26,7 @@ import evaluate from './evaluate';
 import files from './files';
 import find from './find';
 import form from './form';
+import groupLabel from './groupLabel';
 import keyboard from './keyboard';
 import mouse from './mouse';
 import navigate from './navigate';
@@ -60,6 +61,7 @@ export const browserTools: Tool<any>[] = [
   ...files,
   ...find,
   ...form,
+  ...groupLabel,
   ...keyboard,
   ...mouse,
   ...navigate,

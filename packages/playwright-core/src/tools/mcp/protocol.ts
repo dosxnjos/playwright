@@ -76,6 +76,12 @@ export type ExtensionCommands = {
     params: [tabIds: number | number[]];
     result: void;
   };
+  // Fork-only, Playwright-specific: relabel this client's tab group (browser_set_group_label).
+  // `labeled` is false for a client without grouping (--no-tab-group).
+  'extension.setGroupLabel': {
+    params: [label: string];
+    result: { labeled: boolean };
+  };
 };
 
 // Events mirror chrome.<api>.<event>.addListener callback signatures.

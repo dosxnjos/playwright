@@ -82,6 +82,11 @@ export class BrowserModel {
     this._extension.close(reason);
   }
 
+  // Fork-only: a command for the extension that is not CDP (browser_set_group_label).
+  async sendToExtension<M extends keyof ExtensionCommands>(method: M, params: ExtensionCommands[M]['params']): Promise<ExtensionCommands[M]['result']> {
+    return await this._extension.send(method, params);
+  }
+
   async handleCDPCommand(method: string, params: any, sessionId: string | undefined): Promise<any> {
     switch (method) {
       case 'Browser.getVersion':

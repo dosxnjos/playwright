@@ -67,6 +67,7 @@ export class ConnectionBroker {
       throw error;
     });
     const session = new ClientSession(channel, this._registry, options);
+    session.onSetGroupLabel = label => this._groups.setLabel(session, label);
     const sessionId = ++this._lastSessionId;
     this._sessions.set(sessionId, session);
     this._didChangeActivity();

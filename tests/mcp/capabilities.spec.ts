@@ -30,6 +30,7 @@ test('test snapshot tool list', async ({ client }) => {
     'browser_handle_dialog',
     'browser_hover',
     'browser_select_option',
+    'browser_set_group_label',
     'browser_type',
     'browser_close',
     'browser_emulate_media',

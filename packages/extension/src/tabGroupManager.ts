@@ -52,6 +52,18 @@ class ClientTabGroup {
     await this._applyStyle(this._title);
   }
 
+  // Fork-only (browser_set_group_label): the title this group has, or gets with its first tab.
+  get title(): string {
+    return this._title ?? this._defaultTitle;
+  }
+
+  // Fork-only: a group made later takes the title with its first tab.
+  async setTitle(title: string): Promise<void> {
+    this._title = title;
+    if (this.groupId !== undefined)
+      await changeGroups(() => chrome.tabGroups.update(this.groupId!, { title }));
+  }
+
   private async _applyStyle(title: string | undefined): Promise<void> {
     const style = title === undefined ? { color: this.color } : { color: this.color, title };
     await changeGroups(() => chrome.tabGroups.update(this.groupId!, style));
@@ -96,6 +108,21 @@ export class TabGroupManager {
       return;
     await group.adopt(groupId);
     await this._recordClientGroups();
+  }
+
+  // Fork-only (browser_set_group_label): "Playwright · <label>", with " (2)", " (3)"... when another client group
+  // has that title. False for a client without grouping.
+  async setLabel(session: ClientSession, label: string): Promise<boolean> {
+    const group = this._groups.get(session);
+    if (!group)
+      return false;
+    const taken = new Set([...this._groups].filter(([other]) => other !== session).map(([, other]) => other.title));
+    const base = `Playwright · ${label}`;
+    let title = base;
+    for (let i = 2; taken.has(title); i++)
+      title = `${base} (${i})`;
+    await group.setTitle(title);
+    return true;
   }
 
   async orphan(session: ClientSession): Promise<void> {

@@ -28,6 +28,8 @@ export class ClientSession {
   private _registry: TabRegistry;
 
   onClose?: () => void;
+  // Fork-only: browser_set_group_label. Wired by ConnectionBroker to TabGroupManager. False without grouping.
+  onSetGroupLabel?: (label: string) => Promise<boolean>;
 
   constructor(channel: Channel, registry: TabRegistry, options: SessionOptions) {
     this.options = options;
@@ -94,6 +96,12 @@ export class ClientSession {
         for (const tabId of tabIds)
           this._ownedTab({ tabId });
         return await chrome.tabs.remove(tabIds);
+      }
+      case 'extension.setGroupLabel': {
+        const [label] = params;
+        if (typeof label !== 'string' || !label)
+          throw new Error('The label must be a non-empty string');
+        return { labeled: await this.onSetGroupLabel?.(label) ?? false };
       }
     }
     throw new Error(`Unknown method: ${method}`);

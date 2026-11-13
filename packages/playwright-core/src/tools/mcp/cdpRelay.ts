@@ -223,6 +223,14 @@ export class CDPRelayServer {
     });
   }
 
+  // Fork-only: relabels this client's Chrome tab group (browser_set_group_label). False without grouping.
+  async setGroupLabel(label: string): Promise<boolean> {
+    if (!this._browser)
+      throw new Error('Extension not connected');
+    const { labeled } = await this._browser.sendToExtension('extension.setGroupLabel', [label]);
+    return labeled;
+  }
+
   stop(): void {
     this._closeCDPConnection('Server stopped');
     this._closeExtensionConnection('Server stopped');
