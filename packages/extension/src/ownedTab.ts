@@ -28,6 +28,8 @@ export function isDebuggableUrl(url: string | undefined): boolean {
 export class OwnedTab {
   readonly tabId: number;
   readonly session: ClientSession;
+  // Fork (patch 3): the client created this tab, so it is closed when the client leaves (agentTabs.ts).
+  agent = false;
   private _announced: boolean;
   private _attached = false;
   private _disposed = false;

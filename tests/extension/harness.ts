@@ -77,6 +77,9 @@ export const test = base.extend<Fixtures>({
       const args = options.args ?? [];
       // The client finds the browser profile through the environment, unless the test gives --user-data-dir.
       const profileEnv = args.some(arg => arg.startsWith('--user-data-dir=')) ? {} : { PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir };
+      // Fork (FORK.md, patch 3): upstream's specs expect the tabs of a client to stay when it leaves. The fork's specs
+      // that check the default (they close) pass PLAYWRIGHT_MCP_AGENT_TABS=close.
+      options = { ...options, env: { PLAYWRIGHT_MCP_AGENT_TABS: 'keep', ...options.env } };
       const { client, stderr } = await startClient({
         clientName,
         args: ['--extension', ...args],
@@ -127,6 +130,8 @@ export const test = base.extend<Fixtures>({
       url.searchParams.set('protocolVersion', '2');
       url.searchParams.set('client', JSON.stringify({ name: clientName }));
       url.searchParams.set('token', await user.token());
+      // Fork (FORK.md, patch 3): as upstream, the tabs of this relay stay when it leaves.
+      url.searchParams.set('agentTabs', 'keep');
       const connectPage = await user.browserContext.newPage();
       await connectPage.goto(url.toString()).catch(() => {});
       const peer = new RelayPeer(await socketPromise);

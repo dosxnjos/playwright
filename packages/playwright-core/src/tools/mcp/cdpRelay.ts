@@ -259,6 +259,9 @@ export class CDPRelayServer {
       url.searchParams.set('tabGroupColor', tabGroup.color);
     if (this._background)
       url.searchParams.set('background', 'true');
+    // Fork (patch 3): the tabs that the agent created close when it leaves, unless PLAYWRIGHT_MCP_AGENT_TABS=keep.
+    if (process.env.PLAYWRIGHT_MCP_AGENT_TABS === 'keep')
+      url.searchParams.set('agentTabs', 'keep');
     if (this._token)
       url.searchParams.set('token', this._token);
     const href = url.toString();

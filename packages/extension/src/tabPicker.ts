@@ -48,8 +48,10 @@ export class TabPicker {
 
   async apply(selection: Selection, session: ClientSession, connectTabId: number): Promise<chrome.tabs.Tab[]> {
     const tabs = await this._selectedTabs(selection, session, connectTabId);
+    // Fork (patch 3): with nothing selected the connect page becomes the blank tab of the client: the agent's.
+    const agent = selection.groupId === undefined && !selection.tabIds?.length;
     for (const tab of tabs)
-      this._registry.claim(tab, session);
+      this._registry.claim(tab, session, { agent });
     return tabs;
   }
 

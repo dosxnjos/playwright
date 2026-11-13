@@ -15,6 +15,7 @@
  */
 
 
+import { AGENT_TAB_CLEANUP_CAP_MS, closeAgentTabsOfPreviousServiceWorker } from './agentTabs';
 import { ChromeListeners } from './chromeListeners';
 import { ConnectionBroker } from './connectionBroker';
 import { FocusMemory } from './focusMemory';
@@ -33,7 +34,10 @@ class Extension {
     const listeners = new ChromeListeners();
     const registry = new TabRegistry(listeners);
     const groups = new TabGroupManager(registry, listeners);
-    this._ready = Promise.all([registry.ready, groups.ready]);
+    // Fork (patch 3): the agent tabs of a dead service worker close; never for more than 3 s before the messages go on.
+    const agentTabsCleanup = closeAgentTabsOfPreviousServiceWorker().catch(() => {});
+    const cap = new Promise(resolve => setTimeout(resolve, AGENT_TAB_CLEANUP_CAP_MS));
+    this._ready = Promise.all([registry.ready, groups.ready, Promise.race([agentTabsCleanup, cap])]);
     this._picker = new TabPicker(registry, groups);
     // Fork (foco zero): always on, so the first connect page of a session knows the tab the user was on.
     const focusMemory = new FocusMemory();

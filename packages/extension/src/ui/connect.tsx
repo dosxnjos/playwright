@@ -41,7 +41,7 @@ function sessionOptions(): SessionOptions {
     title: params.get('tabGroupTitle') ?? undefined,
     color: params.get('tabGroupColor') ?? undefined,
   };
-  return { clientName, tabGroup, background: params.get('background') === 'true' };
+  return { clientName, tabGroup, background: params.get('background') === 'true', closeAgentTabs: params.get('agentTabs') !== 'keep' };
 }
 
 function relayUrlError(relayUrl: string | null): string | undefined {

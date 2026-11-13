@@ -21,6 +21,8 @@ export type SessionOptions = {
   clientName: string;
   tabGroup?: { title?: string, color?: string };
   background: boolean;
+  // Fork (patch 3): false keeps the tabs that the client created when it leaves, as upstream does (`agentTabs=keep`).
+  closeAgentTabs?: boolean;
 };
 
 export type Selection = {

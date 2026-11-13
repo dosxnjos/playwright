@@ -18,6 +18,8 @@
 import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
 
 import type { ChromeListeners } from './chromeListeners';
+import { closeTabs, forgetAgentTabs, recordAgentTab } from './agentTabs';
+
 import type { ClientSession } from './clientSession';
 
 // Fork (FORK.md § Foco zero, "Popups"): Chrome's openerTabId names the tab that was ACTIVE when a popup opened, not the
@@ -47,7 +49,14 @@ export class TabRegistry {
       this._tabs.get(source.tabId!)?.didReceiveDebuggerEvent(source, method, params);
     });
     listeners.add(chrome.debugger.onDetach, (source, reason) => {
-      this._tabs.get(source.tabId!)?.didDetachDebugger(reason);
+      const tab = this._tabs.get(source.tabId!);
+      // Fork (patch 3): the user took the tab over (Cancel on the debugger bar, DevTools opened): it is theirs now, never
+      // closed when the client leaves.
+      if (tab?.agent && reason !== 'target_closed') {
+        tab.agent = false;
+        forgetAgentTabs([tab.tabId]);
+      }
+      tab?.didDetachDebugger(reason);
     });
     const popupEvents = popupSourceEvents();
     if (popupEvents)
@@ -84,7 +93,8 @@ export class TabRegistry {
     return [...this._tabs.values()].filter(tab => tab.session === session).map(tab => tab.tabId);
   }
 
-  claim(tab: chrome.tabs.Tab, session: ClientSession, options: { announce: boolean } = { announce: true }): void {
+  // Fork (patch 3): `agent` marks a tab that the client created; it is closed when the client leaves (agentTabs.ts).
+  claim(tab: chrome.tabs.Tab, session: ClientSession, options: { announce?: boolean, agent?: boolean } = {}): void {
     const tabId = tab.id!;
     const owner = this.ownerOf(tabId);
     if (owner === session)
@@ -93,7 +103,12 @@ export class TabRegistry {
       throw new Error('This tab is already connected to another client');
     if (this._reservedTabIds.has(tabId))
       throw new Error('This tab is a connect page');
-    this._tabs.set(tabId, new OwnedTab(tab, session, options.announce));
+    const ownedTab = new OwnedTab(tab, session, options.announce ?? true);
+    if (options.agent && session.options.closeAgentTabs !== false) {
+      ownedTab.agent = true;
+      recordAgentTab(tabId);
+    }
+    this._tabs.set(tabId, ownedTab);
     this.onTabClaimed?.(tab, session);
   }
 
@@ -102,8 +117,21 @@ export class TabRegistry {
     if (!tab)
       return;
     this._tabs.delete(tabId);
+    forgetAgentTabs([tabId]);
     tab.session.tabReleased(tabId);
     await tab.dispose();
+  }
+
+  // Fork (patch 3): the client left, its agent tabs go. Dropped from the table first, so that the session (already
+  // closed) gets no event for them; the detach and the close run one tab at a time.
+  async closeAgentTabs(session: ClientSession): Promise<void> {
+    const tabs = [...this._tabs.values()].filter(tab => tab.session === session && tab.agent);
+    for (const tab of tabs)
+      this._tabs.delete(tab.tabId);
+    const tabIds = tabs.map(tab => tab.tabId);
+    forgetAgentTabs(tabIds);
+    await Promise.all(tabs.map(tab => tab.dispose()));
+    await closeTabs(tabIds);
   }
 
   async transfer(tab: chrome.tabs.Tab, to: ClientSession): Promise<void> {
@@ -121,7 +149,7 @@ export class TabRegistry {
       return;
     const opener = tab.openerTabId === undefined ? undefined : this.ownerOf(tab.openerTabId);
     if (opener)
-      this.claim(tab, opener);
+      this.claim(tab, opener, { agent: true });
   }
 
   // Fork (FORK.md § Foco zero, "Popups"): a popup goes to the owner of the tab that opened it, the real source.
@@ -138,7 +166,7 @@ export class TabRegistry {
     if (owner.options.background && tab.active && tab.openerTabId !== undefined && tab.openerTabId !== tab.id && tab.openerTabId !== details.sourceTabId)
       void chrome.tabs.update(tab.openerTabId, { active: true }).catch(() => {});
     try {
-      this.claim({ ...tab, openerTabId: details.sourceTabId }, owner);
+      this.claim({ ...tab, openerTabId: details.sourceTabId }, owner, { agent: true });
     } catch {
       // Another client took the tab meanwhile.
     }
@@ -150,6 +178,7 @@ export class TabRegistry {
     if (!tab)
       return;
     this._tabs.delete(tabId);
+    forgetAgentTabs([tabId]);
     tab.session.tabClosed(tabId, removeInfo);
     void tab.dispose();
   }

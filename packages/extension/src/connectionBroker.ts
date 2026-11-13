@@ -115,6 +115,8 @@ export class ConnectionBroker {
     // Put the user's tab back first, before the tabs of the client go.
     if (captureReveal.hasPending(session))
       await captureReveal.restoreAll(session);
+    // Fork (patch 3, FORK.md): the tabs that the client created close; the tabs of the user go free (gray group).
+    await this._registry.closeAgentTabs(session);
     await this._registry.releaseAll(session);
     await this._groups.orphan(session);
   }

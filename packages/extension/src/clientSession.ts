@@ -96,7 +96,10 @@ export class ClientSession {
         }
         // The response announces the tab to the client.
         if (!this._channel.closed)
-          this._registry.claim(tab, this, { announce: false });
+          this._registry.claim(tab, this, { announce: false, agent: true });
+        else
+          // Fork (patch 3): the client left while the tab was being created; nobody would ever close it.
+          await chrome.tabs.remove(tab.id!).catch(() => {});
         return tab;
       }
       case 'chrome.tabs.remove': {
