@@ -68,6 +68,13 @@ export async function closeAgentTabsOfPreviousServiceWorker(): Promise<void> {
   persist();
   if (!tabIds.length)
     return;
+  const inFront = await tabsInFrontOfUser(tabIds);
+  await closeTabs(tabIds.filter(tabId => !inFront.has(tabId)));
+}
+
+// The tabs that are the active tab of a focused window: the user may be typing in them (a 2FA code the agent asked for).
+// A failed window query counts as focused. A tab that is gone is not in front.
+export async function tabsInFrontOfUser(tabIds: number[]): Promise<Set<number>> {
   const tabs = (await Promise.all(tabIds.map(tabId => chrome.tabs.get(tabId).catch(() => undefined)))).filter(tab => !!tab);
   let focused: (windowId: number) => boolean;
   try {
@@ -76,7 +83,7 @@ export async function closeAgentTabsOfPreviousServiceWorker(): Promise<void> {
   } catch {
     focused = () => true;
   }
-  await closeTabs(tabs.filter(tab => !(tab.active && focused(tab.windowId))).map(tab => tab.id!));
+  return new Set(tabs.filter(tab => tab.active && focused(tab.windowId)).map(tab => tab.id!));
 }
 
 // Chrome refuses tab changes while the user drags a tab.

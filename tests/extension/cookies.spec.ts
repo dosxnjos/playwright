@@ -61,5 +61,16 @@ test('Storage.setCookies passes only when every cookie of the call is already ex
   expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', url, expires: Date.now() / 1000 + 3600 }] })).toEqual(refused);
   expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', url, expires: 0 }, { name: 'b', value: '1', url }] })).toEqual(refused);
   expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [] })).toEqual(refused);
+  for (const method of ['Network.setCookie', 'Network.setCookies', 'Network.deleteCookies'])
+    expect(await client.sendToTab(tabId, method, {})).toEqual({ error: `${method} is not allowed: it changes the state of the browser, not of the tab` });
+
+  // An expired cookie of a site where the client has no tab: deleting it would log the user out there.
+  const otherSite = { error: 'Storage.setCookies is not allowed for cookies of example.org: this client has no tab on that site. Pass the domain of a tab of this client.' };
+  expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', domain: '.example.org', path: '/', expires: 0 }] })).toEqual(otherSite);
+  expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', url, expires: 0 }] })).toEqual({ error: 'Storage.setCookies is not allowed for cookies of localhost: this client has no tab on that site. Pass the domain of a tab of this client.' });
+  // Its tab on the site: an expired cookie of that site passes.
+  await client.sendToTab(tabId, 'Page.navigate', { url });
+  await expect.poll(() => user.tabs()).toContain('Alpha');
   expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', url, expires: 0 }] })).toEqual({ result: {} });
+  expect(await client.sendToTab(tabId, 'Storage.setCookies', { cookies: [{ name: 'a', value: '1', domain: '.localhost', path: '/', expires: 0 }] })).toEqual({ result: {} });
 });

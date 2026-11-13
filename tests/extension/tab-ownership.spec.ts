@@ -29,6 +29,8 @@ test('tabs that the client opened close when it leaves, the tab that the user pi
   await client.openTab('Opener');
   await client.click('e2');
   await expect.poll(sorted(client.tabs)).toEqual(['Alpha', 'Opened', 'Opener']);
+  // The user looks at the tab they gave, not at a tab of the agent (that one would stay, see below).
+  await user.pageOf('Alpha').bringToFront();
 
   await client.close();
   await expect.poll(user.groups).toEqual([{ title: 'Playwright · worker', color: 'grey', tabs: ['Alpha'] }]);
@@ -73,6 +75,27 @@ test('tab of a client that the user moved to another client belongs to the user 
 
   await second.close();
   await expect.poll(user.groups).toEqual([{ title: 'Playwright · second', color: 'grey', tabs: ['Alpha'] }]);
+});
+
+test('agent tab in front of the user stays when the client leaves, and a popup of a user tab is the user\'s', async ({ user, connect }) => {
+  user.definePage('Alpha', `<button onclick="window.open('${user.urlOf('Opened')}', '_blank', 'noopener')">open</button>`);
+  await user.openTab('Alpha');
+  const client = await connect('worker', { tabs: ['Alpha'] }, close);
+  await client.selectTab('Alpha');
+  expect(await client.snapshot()).toContain('button "open" [ref=e2]');
+  await client.click('e2');
+  await expect.poll(sorted(client.tabs)).toEqual(['Alpha', 'Opened']);
+  await client.openTab('Beta');
+  await expect.poll(sorted(client.tabs)).toEqual(['Alpha', 'Beta', 'Opened']);
+  await user.chrome(async (chrome, tabOf) => {
+    const beta = await tabOf('Beta');
+    await chrome.tabs.update(beta.id, { active: true });
+    await chrome.windows.update(beta.windowId, { focused: true });
+  });
+
+  await client.close();
+  await expect.poll(user.connectedClients).toEqual([]);
+  await expect.poll(user.groups).toEqual([{ title: 'Playwright · worker', color: 'grey', tabs: ['Alpha', 'Beta', 'Opened'] }]);
 });
 
 test('PLAYWRIGHT_MCP_AGENT_TABS=keep keeps the tabs of the client in a gray group, as upstream', async ({ user, connectWithToken }) => {

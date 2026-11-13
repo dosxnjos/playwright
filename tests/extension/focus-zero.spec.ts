@@ -16,7 +16,8 @@
 
 // Fork-only (FORK.md § Foco zero): with a token nothing the agents do takes the tab the user looks at.
 
-import { test, expect } from './harness';
+import { test, expect, RelayPeer } from './harness';
+import { extensionId } from './extension-fixtures';
 
 import type { ExtensionClient } from './harness';
 
@@ -62,7 +63,8 @@ test('a connect page that a browser older than Chrome 158 opened in front gives 
 });
 
 test('a sub-agent connects through the connected main agent, in the background and in its own group', async ({ user, connectWithToken, browserWithExtension }) => {
-  const client = await connectWithToken('main');
+  // The main agent in front (PLAYWRIGHT_MCP_FOCUS=on): only the sub-agent's own scope makes it background.
+  const client = await connectWithToken('main', { env: { PLAYWRIGHT_MCP_FOCUS: 'on', DEBUG: 'pw:mcp:relay' } });
   await client.navigate('Alpha');
   const page = await user.openTab('Front');
   await page.bringToFront();
@@ -75,6 +77,31 @@ test('a sub-agent connects through the connected main agent, in the background a
   expect(await user.activeTabs()).toEqual(['Front']);
   // Only the main agent started the browser: the sub-agent's connect page came through the main agent's connection.
   expect(await browserWithExtension.chromeStubArgs()).toHaveLength(1);
+  expect(client.stderr()).toContain('Connect page opened via portador');
+
+  // Its screenshot, with nobody looking at the window: the tab is shown for the capture, and the user's comes back.
+  await user.chrome(async (chrome, tabOf) => chrome.windows.update((await tabOf('Front')).windowId, { focused: false }));
+  const shot = await client.mcp.callTool({ name: 'browser_take_screenshot', arguments: { _meta: subAgent } }) as any;
+  expect(shot.isError).toBeFalsy();
+  expect(client.stderr()).toMatch(/Capture of tab \d+: revealed=true/);
+  expect(await user.activeTabs()).toEqual(['Front']);
+});
+
+test('a carrier cannot close the connect page it opened once a client owns it', async ({ user, connectRelay, server }) => {
+  const carrier = await connectRelay('carrier');
+  // The second relay is the test server again: its connect page goes through the carrier, as a sub-agent's does.
+  const socket = new Promise<any>(resolve => server.onceWebSocketConnection(resolve));
+  const url = new URL(`chrome-extension://${extensionId}/connect.html`);
+  url.searchParams.set('mcpRelayUrl', `ws://127.0.0.1:${server.PORT}/ws`);
+  url.searchParams.set('protocolVersion', '2');
+  url.searchParams.set('client', JSON.stringify({ name: 'sub-agent' }));
+  url.searchParams.set('token', await user.token());
+  const { result: tab } = await carrier.send('chrome.tabs.create', { url: url.toString(), active: false });
+  const subAgentPeer = new RelayPeer(await socket);
+  await expect.poll(() => subAgentPeer.eventNames()).toContain('extension.initialized');
+  expect(subAgentPeer.announcedTabIds()).toEqual([tab.id]);
+
+  expect(await carrier.send('chrome.tabs.remove', tab.id)).toEqual({ error: `Tab ${tab.id} is not owned by this client` });
 });
 
 test('PLAYWRIGHT_MCP_AGENT_SILENT=off: a sub-agent starts the browser again and comes to the front', async ({ user, connectWithToken, browserWithExtension }) => {

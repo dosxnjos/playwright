@@ -16,7 +16,7 @@
 
 
 import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
-import { closeTabs, forgetAgentTabs, recordAgentTab } from './agentTabs';
+import { closeTabs, forgetAgentTabs, recordAgentTab, tabsInFrontOfUser } from './agentTabs';
 
 import type { ChromeListeners } from './chromeListeners';
 import type { ClientSession } from './clientSession';
@@ -96,8 +96,15 @@ export class TabRegistry {
   claim(tab: chrome.tabs.Tab, session: ClientSession, options: { announce?: boolean, agent?: boolean } = {}): void {
     const tabId = tab.id!;
     const owner = this.ownerOf(tabId);
-    if (owner === session)
+    if (owner === session) {
+      // Fork (patch 3): another path (a group change) claimed it first; the origin still counts.
+      const ownedTab = this._tabs.get(tabId)!;
+      if (options.agent && !ownedTab.agent && session.options.closeAgentTabs !== false) {
+        ownedTab.agent = true;
+        recordAgentTab(tabId);
+      }
       return;
+    }
     if (owner)
       throw new Error('This tab is already connected to another client');
     if (this._reservedTabIds.has(tabId))
@@ -122,15 +129,21 @@ export class TabRegistry {
   }
 
   // Fork (patch 3): the client left, its agent tabs go. Dropped from the table first, so that the session (already
-  // closed) gets no event for them; the detach and the close run one tab at a time.
+  // closed) gets no event for them; each tab is closed on its own (one that is gone does not stop the others). The tab
+  // in front of the user (active tab of a focused window) is never closed: it becomes the user's and goes free.
   async closeAgentTabs(session: ClientSession): Promise<void> {
-    const tabs = [...this._tabs.values()].filter(tab => tab.session === session && tab.agent);
+    const agentTabs = [...this._tabs.values()].filter(tab => tab.session === session && tab.agent);
+    const inFront = await tabsInFrontOfUser(agentTabs.map(tab => tab.tabId));
+    for (const tab of agentTabs)
+      tab.agent = !inFront.has(tab.tabId);
+    const tabs = agentTabs.filter(tab => tab.agent);
     for (const tab of tabs)
       this._tabs.delete(tab.tabId);
     const tabIds = tabs.map(tab => tab.tabId);
-    forgetAgentTabs(tabIds);
     await Promise.all(tabs.map(tab => tab.dispose()));
     await closeTabs(tabIds);
+    // After the close: a worker that dies before it still finds them in the record.
+    forgetAgentTabs(agentTabs.map(tab => tab.tabId));
   }
 
   async transfer(tab: chrome.tabs.Tab, to: ClientSession): Promise<void> {
@@ -148,7 +161,7 @@ export class TabRegistry {
       return;
     const opener = tab.openerTabId === undefined ? undefined : this.ownerOf(tab.openerTabId);
     if (opener)
-      this.claim(tab, opener, { agent: true });
+      this.claim(tab, opener, { agent: this._tabs.get(tab.openerTabId!)?.agent });
   }
 
   // Fork (FORK.md § Foco zero, "Popups"): a popup goes to the owner of the tab that opened it, the real source.
@@ -165,7 +178,8 @@ export class TabRegistry {
     if (owner.options.background && tab.active && tab.openerTabId !== undefined && tab.openerTabId !== tab.id && tab.openerTabId !== details.sourceTabId)
       void chrome.tabs.update(tab.openerTabId, { active: true }).catch(() => {});
     try {
-      this.claim({ ...tab, openerTabId: details.sourceTabId }, owner, { agent: true });
+      // Fork (patch 3): a popup is the agent's when its source is: a link from a tab of the user stays the user's.
+      this.claim({ ...tab, openerTabId: details.sourceTabId }, owner, { agent: this._tabs.get(details.sourceTabId)?.agent });
     } catch {
       // Another client took the tab meanwhile.
     }

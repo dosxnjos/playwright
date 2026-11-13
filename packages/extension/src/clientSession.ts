@@ -16,7 +16,7 @@
 
 
 import { captureReveal } from './captureReveal';
-import { checkCdpMethod } from './cdpPolicy';
+import { checkCdpMethod, cookieSitesOutside } from './cdpPolicy';
 
 import type { Channel } from './channel';
 import type { OwnedTab } from './ownedTab';
@@ -83,7 +83,11 @@ export class ClientSession {
       case 'chrome.debugger.sendCommand': {
         const [target, cdpMethod, cdpParams] = params;
         checkCdpMethod(cdpMethod, cdpParams);
-        return await this._ownedTab(target).sendCommand(target.sessionId, cdpMethod, cdpParams);
+        const ownedTab = this._ownedTab(target);
+        // Fork (patch 8): an expired cookie passed checkCdpMethod; it must also be of a site where this client has a tab.
+        if (cdpMethod === 'Storage.setCookies')
+          await this._checkCookieSites(cdpParams);
+        return await ownedTab.sendCommand(target.sessionId, cdpMethod, cdpParams);
       }
       case 'chrome.tabs.create': {
         const [{ url, active }] = params;
@@ -105,8 +109,10 @@ export class ClientSession {
       case 'chrome.tabs.remove': {
         const tabIds = [params[0]].flat() as number[];
         for (const tabId of tabIds) {
-          // Fork (carrier): a connect page this client opened, that did not connect in time.
-          if (!this._carriedConnectPages.delete(tabId))
+          // Fork (carrier): a connect page this client opened, that did not connect in time. Only while no client owns
+          // it: with the token the page becomes the blank tab of the client it connected.
+          const carried = this._carriedConnectPages.delete(tabId);
+          if (!carried || this._registry.ownerOf(tabId))
             this._ownedTab({ tabId });
         }
         return await chrome.tabs.remove(tabIds);
@@ -129,6 +135,20 @@ export class ClientSession {
       }
     }
     throw new Error(`Unknown method: ${method}`);
+  }
+
+  private async _checkCookieSites(cdpParams: unknown): Promise<void> {
+    const tabs = await Promise.all(this._registry.tabIdsOf(this).map(tabId => chrome.tabs.get(tabId).catch(() => undefined)));
+    const hosts: string[] = [];
+    for (const tab of tabs) {
+      try {
+        hosts.push(new URL(tab?.url || tab?.pendingUrl || '').hostname.toLowerCase());
+      } catch {
+      }
+    }
+    const outside = cookieSitesOutside(cdpParams, hosts.filter(Boolean));
+    if (outside.length)
+      throw new Error(`Storage.setCookies is not allowed for cookies of ${outside.join(', ')}: this client has no tab on that site. Pass the domain of a tab of this client.`);
   }
 
   private _ownedTab(target: chrome.debugger.Debuggee): OwnedTab {

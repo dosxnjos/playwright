@@ -19,6 +19,10 @@ const BROWSER_STATE_METHODS = new Set([
   'Storage.setCookies',
   'Storage.clearCookies',
   'Network.clearBrowserCookies',
+  // Fork (patch 8): the same cookie store through the Network domain; Playwright does not use them.
+  'Network.setCookie',
+  'Network.setCookies',
+  'Network.deleteCookies',
   'Network.clearBrowserCache',
   'Browser.grantPermissions',
   'Browser.resetPermissions',
@@ -41,6 +45,7 @@ export function checkCdpMethod(method: string, params?: unknown): void {
 // Fork-only (patch 8). Playwright's clearCookies() with a filter (browser_cookie_delete) reads the cookies and sets the
 // matching ones again with `expires: 0`, through Storage.setCookies (server/browserContext.ts clearCookies). A call in
 // which every cookie is already expired can only delete. A missing `expires` or -1 is a session cookie: not expired.
+// ClientSession also checks that each cookie is of a site where the client has a tab (cookieSitesOutside).
 function onlyExpiredCookies(params: unknown): boolean {
   const cookies = (params as { cookies?: unknown } | undefined)?.cookies;
   if (!Array.isArray(cookies) || !cookies.length)
@@ -50,4 +55,26 @@ function onlyExpiredCookies(params: unknown): boolean {
     const expires = (cookie as { expires?: unknown } | null)?.expires;
     return typeof expires === 'number' && expires >= 0 && expires <= now;
   });
+}
+
+// Fork-only (patch 8): the domains of the cookies of a Storage.setCookies call that are not of a site of `hosts` (the
+// hosts of the tabs of the client). Deleting a cookie by name alone would otherwise log the user out of every site that
+// has a cookie with that name.
+export function cookieSitesOutside(params: unknown, hosts: string[]): string[] {
+  const cookies = (params as { cookies?: unknown[] } | undefined)?.cookies ?? [];
+  const outside = new Set<string>();
+  for (const cookie of cookies) {
+    const { domain, url } = (cookie ?? {}) as { domain?: unknown, url?: unknown };
+    let site = typeof domain === 'string' ? domain : '';
+    if (!site && typeof url === 'string') {
+      try {
+        site = new URL(url).hostname;
+      } catch {
+      }
+    }
+    site = site.replace(/^\./, '').toLowerCase();
+    if (!site || !hosts.some(host => host === site || host.endsWith('.' + site) || site.endsWith('.' + host)))
+      outside.add(site || '(no domain)');
+  }
+  return [...outside];
 }
