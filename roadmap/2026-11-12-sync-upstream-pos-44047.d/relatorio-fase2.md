@@ -96,5 +96,6 @@ Wrapper: `node scripts/run-mcp-server.test.cjs` → `27/27 passed`. Smoke com Ch
 - **Tomada pelo usuário** (Cancelar na barra do depurador rebaixa a aba do agente para "do usuário") e **aba criada
   depois do fechamento**: implementadas, sem teste (o headless não tem barra do depurador; a corrida é difícil de
   provocar). Como no fork velho.
-- **Mutantes**: não rodei mutantes desta vez; o guarda "aba na frente da janela com foco não fecha" foi provado pelo
-  próprio teste (a aba `Beta` do mesmo agente fecha e a `Alpha` na frente fica).
+- **Mutantes**: um só, no guarda "aba do agente na frente da janela com foco não fecha quando o worker morre"
+  (`agentTabs.ts`, condição trocada por `false`): `tab-ownership.spec.ts:86` ficou vermelho 3/3 (`Alpha` fechada);
+  restaurado, 3/3 verde. A origem do popup já tinha sido "mutada" de graça: o upstream puro deixava os testes vermelhos.
