@@ -344,10 +344,12 @@ test('the chosen token and profile folder reach the connect page, and no log lin
   await fs.promises.writeFile(stub, `require('fs').appendFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');`);
   const userDataDir = testInfo.outputPath('user-data');
   await fs.promises.mkdir(userDataDir, { recursive: true });
+  // The start profile folder comes from --profile-dir-name here, not from the env (the wrapper sets the env).
+  const { PLAYWRIGHT_MCP_PROFILE_DIR_NAME, ...vaultWithoutProfile } = vault;
   const { client, stderr } = await startClient({
-    args: ['--extension'],
+    args: ['--extension', '--profile-dir-name', PLAYWRIGHT_MCP_PROFILE_DIR_NAME],
     env: {
-      ...vault,
+      ...vaultWithoutProfile,
       PLAYWRIGHT_MCP_EXECUTABLE_PATH: stub,
       PWTEST_EXTENSION_USER_DATA_DIR: userDataDir,
       PLAYWRIGHT_MCP_PROFILE_ALIASES: testInfo.outputPath('no-aliases.json'),
@@ -363,6 +365,11 @@ test('the chosen token and profile folder reach the connect page, and no log lin
   await expect.poll(async () => (await starts()).length).toBe(1);
   expect((await starts())[0]).toContain('--profile-directory=Profile 13');
   expect(connectTokenOf((await starts())[0])).toBe('dummy-padrao');
+
+  // The start variant, with its folder from --profile-dir-name: nothing to switch.
+  const same = await client.callTool({ name: 'browser_use_profile', arguments: { profile: 'padrao' } });
+  responses.push(textOf(same));
+  expect(parseResponse(same as any)?.result).toContain('Already using profile padrao');
 
   const switched = await client.callTool({ name: 'browser_use_profile', arguments: { profile: 'jacira' } });
   responses.push(textOf(switched));

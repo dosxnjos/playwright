@@ -16,7 +16,7 @@
 
 import { Option as ProgramOption } from 'commander';
 import * as mcpServer from '../utils/mcp/server';
-import { commaSeparatedList, defaultCodegenLanguage, dotenvFileLoader, enumParser, headerParser, numberParser, resolutionParser, resolveCLIConfigForMCP, semicolonSeparatedList } from './config';
+import { commaSeparatedList, defaultCodegenLanguage, dotenvFileLoader, enumParser, headerParser, numberParser, resolutionParser, resolveCLIConfigForMCP, resolveExtensionOptions, semicolonSeparatedList } from './config';
 import { setupExitWatchdog } from './watchdog';
 import { connectToBrowserEndpoint, createBrowserWithInfo, createIdleTimer } from './browserFactory';
 import { BrowserBackend } from '../backend/browserBackend';
@@ -199,6 +199,6 @@ export function decorateMCPCommand(command: Command) {
             });
           },
         };
-        await mcpServer.start(withAgentRouting(factory, config), config.server);
+        await mcpServer.start(withAgentRouting(factory, config, process.env, config.extension ? resolveExtensionOptions(options).profileDirName : undefined), config.server);
       });
 }

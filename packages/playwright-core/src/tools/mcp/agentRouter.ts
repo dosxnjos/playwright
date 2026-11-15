@@ -52,8 +52,9 @@ export function agentRoutingEnabled(config: FullConfig): boolean {
   return !!config.browser.isolated || !!config.extension;
 }
 
-// `env` is only passed by tests; the server reads the vault from its own env.
-export function withAgentRouting(inner: ServerBackendFactory, config: FullConfig, env: NodeJS.ProcessEnv = process.env): ServerBackendFactory {
+// `env` is only passed by tests; the server reads the vault from its own env. `startProfileDirName` is the profile
+// folder the extension relay starts with (config.ts resolveExtensionOptions: --profile-dir-name, then the env).
+export function withAgentRouting(inner: ServerBackendFactory, config: FullConfig, env: NodeJS.ProcessEnv = process.env, startProfileDirName = env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME): ServerBackendFactory {
   if (!agentRoutingEnabled(config))
     return inner;
   const extension = !!config.extension;
@@ -66,7 +67,7 @@ export function withAgentRouting(inner: ServerBackendFactory, config: FullConfig
     ...schema,
     description: useProfileDescription(vaultVariants(env), profileLabels(), startVariant(env)),
   } : schema);
-  return { ...inner, toolSchemas, create: async clientInfo => new AgentRouter(inner, clientInfo, { extension, env, profileLabels }) };
+  return { ...inner, toolSchemas, create: async clientInfo => new AgentRouter(inner, clientInfo, { extension, env, startProfileDirName, profileLabels }) };
 }
 
 type RouterOptions = {
@@ -74,6 +75,8 @@ type RouterOptions = {
   extension: boolean;
   // Where the vault is read (PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>, PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>).
   env: NodeJS.ProcessEnv;
+  // The profile folder the relay uses while no variant is chosen.
+  startProfileDirName: string | undefined;
   // Chrome's names of its profiles and the user's aliases, for the answers.
   profileLabels: () => ProfileLabels;
 };
@@ -291,9 +294,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
   private _isCurrent(variant: { name: string, profileDirName: string }): boolean {
     if (this._profile)
       return this._profile.variant === variant.name;
-    // Nothing chosen yet: the server's start variant, when its profile folder is the one the env pins.
-    const env = this._options.env;
-    return startVariant(env)?.name === variant.name && env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME === variant.profileDirName;
+    // Nothing chosen yet: the server's start variant, when its profile folder is the one the relay starts with.
+    return startVariant(this._options.env)?.name === variant.name && this._options.startProfileDirName === variant.profileDirName;
   }
 
   private _watch(sessao: string) {
