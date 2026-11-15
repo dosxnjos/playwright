@@ -16,10 +16,20 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 
-// Fork-only (patch 7). Set by the agent router around a sub-agent's backend creation, read where the extension relay
-// is built: a background relay opens its connect page and its tabs without taking the user's window
-// (FORK.md § Foco zero).
-export const relayScope = new AsyncLocalStorage<{ background: boolean }>();
+// Fork-only (patch 9): the vault variant chosen with browser_use_profile. The token never leaves the server process:
+// it only goes into the connect page URL (cdpRelay.ts), never into a response or a log line.
+export type ExtensionProfile = {
+  variant: string;
+  token: string;
+  profileDirName: string;
+};
+
+// Fork-only. Set by the agent router around each agent's backend creation, read where the extension relay is built.
+// - background (patch 7): a sub-agent's relay opens its connect page and its tabs without taking the user's window
+//   (FORK.md § Foco zero).
+// - profile (patch 9): the variant this conversation chose with browser_use_profile; it wins over
+//   PLAYWRIGHT_MCP_EXTENSION_TOKEN, PLAYWRIGHT_MCP_PROFILE_DIR_NAME and --profile-dir-name.
+export const relayScope = new AsyncLocalStorage<{ background: boolean, profile?: ExtensionProfile }>();
 
 // Fork-only. Lets tools reach the extension relay of the browser they run on
 // (session-level commands such as browser_set_group_label) without threading it

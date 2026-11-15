@@ -40,6 +40,7 @@ import screenshot from './screenshot';
 import storage from './storage';
 import tabs from './tabs';
 import tracing from './tracing';
+import useProfile from './useProfile';
 import verify from './verify';
 import video from './video';
 import wait from './wait';
@@ -75,6 +76,7 @@ export const browserTools: Tool<any>[] = [
   ...storage,
   ...tabs,
   ...tracing,
+  ...useProfile,
   ...verify,
   ...video,
   ...wait,

@@ -122,13 +122,14 @@ export class CDPRelayServer {
   private _protocolVersion: number;
   private _token?: string;
 
-  constructor(browserChannel: string, executablePath?: string, customUserDataDir?: string, profileDirectory?: string, background = false) {
+  constructor(browserChannel: string, executablePath?: string, customUserDataDir?: string, profileDirectory?: string, background = false, token?: string) {
     this._browserChannel = browserChannel;
     this._executablePath = executablePath;
     this._customUserDataDir = customUserDataDir;
     this._profileDirectory = profileDirectory;
     this._protocolVersion = parseInt(process.env.PWTEST_EXTENSION_PROTOCOL ?? protocol.VERSION.toString(), 10);
-    this._token = process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+    // Fork (patch 9): the token of the variant chosen with browser_use_profile, else the env one.
+    this._token = token ?? process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
     // Fork (patch 7, foco zero): a sub-agent's relay is always in the background, and the main agent's too when a token
     // connects it without a click, unless PLAYWRIGHT_MCP_FOCUS=on. Without a token the main agent's connect page has to
     // stay in front: the user clicks Allow there. PLAYWRIGHT_MCP_AGENT_SILENT=off turns both off (--background stays).
@@ -176,7 +177,7 @@ export class CDPRelayServer {
     debugLogger('Establishing extension connection');
     // Fork (patch 7): synchronous, before any await, so relays started in the same tick still get an order. A relay
     // stays here until it connects or fails, so a younger one waits for it instead of starting the browser again.
-    const earlier = [...connectingRelays];
+    const earlier = [...connectingRelays].filter(relay => this._sameProfile(relay));
     connectingRelays.add(this);
     try {
       await this._openConnectPageInBrowser(clientName, tabGroup, earlier);
@@ -208,10 +209,10 @@ export class CDPRelayServer {
       return false;
     // No carrier yet: an older relay is starting the browser right now; wait for it rather than start a second one.
     // Not without a token: that relay waits for a click, for as long as the user takes.
-    if (this._token && !CDPRelayServer._carriers().length)
+    if (this._token && !this._carriers().length)
       await CDPRelayServer._waitForEarlierRelay(earlier);
     const active = !(this._background && this._token);
-    for (const carrier of CDPRelayServer._carriers()) {
+    for (const carrier of this._carriers()) {
       const deadline = monotonicTime() + carrierTimeout();
       const created = carrier.sendToExtension('chrome.tabs.create', [{ url: href, active }]);
       let tabId: number | undefined;
@@ -306,9 +307,14 @@ export class CDPRelayServer {
     return labeled;
   }
 
-  // Fork-only (patch 7).
-  private static _carriers(): CDPRelayServer[] {
-    return [...connectedRelays].filter(relay => !!relay._browser);
+  // Fork-only (patch 7). Only relays of the same profile and token: a carrier opens the connect page in its own Chrome
+  // profile, and after browser_use_profile (patch 9) a relay of the old profile may still be closing.
+  private _carriers(): CDPRelayServer[] {
+    return [...connectedRelays].filter(relay => !!relay._browser && this._sameProfile(relay));
+  }
+
+  private _sameProfile(relay: CDPRelayServer): boolean {
+    return relay._profileDirectory === this._profileDirectory && relay._token === this._token;
   }
 
   // Fork-only (patch 7): only relays registered before this one; waiting on later ones too, relays started together

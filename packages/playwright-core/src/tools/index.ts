@@ -39,6 +39,8 @@ export { withAgentRouting } from './mcp/agentRouter';
 // Fork-only (patch 7): exported for tests/mcp/agent-silent.spec.ts.
 export { screenshotTimeout, screenshotTimeoutFor } from './backend/screenshot';
 export { registerExtensionRelay } from './backend/extensionSession';
+// Fork-only (patch 9): exported for tests/mcp/use-profile.spec.ts.
+export { relayScope } from './backend/extensionSession';
 
 export type { ContextConfig } from './backend/context';
 export type { CallToolRequest, CallToolResult, Tool } from './backend/tool';
