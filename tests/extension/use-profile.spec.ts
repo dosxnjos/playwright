@@ -60,4 +60,8 @@ test('a switch closes the agent tabs of every agent, and the next call connects 
   expect(client.stderr()).toContain('use profile variant=jacira profileDir=Profile 6 closing=2');
   expect(client.stderr()).not.toContain(await user.token());
   expect(JSON.stringify(switched.content)).not.toContain(await user.token());
+
+  // The sub-agent lost its tabs to main's switch: its next result says so.
+  const subAgentNext = await client.mcp.callTool({ name: 'browser_navigate', arguments: { url: user.urlOf('Delta'), _meta: subAgent } });
+  expect(JSON.stringify(subAgentNext.content)).toContain('Another agent of this conversation switched it to profile jacira');
 });
