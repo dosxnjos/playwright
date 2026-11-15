@@ -51,12 +51,18 @@ const textOf = (result: { content?: unknown }) => JSON.stringify(result.content)
 
 type Created = { clientName: string, background: boolean, profile?: { variant: string, profileDirName: string } };
 
-async function startRouter(config: object, env: Args = vault) {
+async function startRouter(config: object, env: Args = vault, connecting?: Promise<void>) {
   const created: Created[] = [];
   let disposed = 0;
   class FakeBackend extends EventEmitter {
+    constructor(readonly profile: string | undefined) {
+      super();
+    }
     async callTool(name: string) {
       return { content: [{ type: 'text' as const, text: name }] };
+    }
+    dynamicTools() {
+      return [{ name: `page_tool_of_${this.profile ?? 'env'}` }];
     }
     async dispose() {
       disposed++;
@@ -69,7 +75,10 @@ async function startRouter(config: object, env: Args = vault) {
       const store = tools.relayScope.getStore();
       const profile = store?.profile ? { variant: store.profile.variant, profileDirName: store.profile.profileDirName } : undefined;
       created.push({ clientName: clientInfo.clientName, background: !!store?.background, profile });
-      return new FakeBackend();
+      // The first backend may stay connecting until the test lets it go.
+      if (created.length === 1)
+        await connecting;
+      return new FakeBackend(profile?.variant);
     },
   };
   const clientInfo = { cwd: process.cwd(), clientName: 'test' };
@@ -136,6 +145,26 @@ test('a switch closes the backends of every agent, and the next calls reopen the
     expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'padrao' }) as any)?.result).toContain('Closed the browser of 2 agent(s)');
     await call('main', 'browser_navigate');
     expect(created.at(-1)?.profile).toEqual({ variant: 'padrao', profileDirName: 'Profile 13' });
+  } finally {
+    await router.dispose?.();
+  }
+});
+
+test('a switch while main is still connecting to the old profile disposes that connection once it is up', async () => {
+  let connected!: () => void;
+  const { router, call, created, disposed } = await startRouter(extensionConfig, vault, new Promise<void>(resolve => connected = resolve));
+  try {
+    const first = call('main', 'browser_navigate');
+    await expect.poll(() => created.length).toBe(1);
+    const switched = call('main', 'browser_use_profile', { profile: 'jacira' });
+    await call('main', 'browser_navigate');
+    expect(created.at(-1)?.profile?.variant).toBe('jacira');
+    connected();
+    await first;
+    expect(parseResponse(await switched as any)?.result).toContain('Closed the browser of 1 agent(s)');
+    expect(disposed()).toBe(1);
+    // The late backend of the old profile never became the current main.
+    expect(router.dynamicTools?.().map(tool => tool.name)).toEqual(['page_tool_of_jacira']);
   } finally {
     await router.dispose?.();
   }

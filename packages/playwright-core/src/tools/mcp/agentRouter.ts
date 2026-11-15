@@ -163,7 +163,9 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
       await backend.initialize?.(clientInfo);
       // NEVER re-emit 'disconnected' upwards: the server would drop every agent, main included (server.ts).
       backend.once('disconnected', () => this._drop(key, entry, true));
-      if (key === MAIN) {
+      // A main dropped while it was still connecting (browser_use_profile) is disposed by whoever dropped it: never
+      // let it become the current main.
+      if (key === MAIN && this._entries.get(key) === entry) {
         this._main = backend;
         backend.on?.('dynamictoolschange', () => this.emit('dynamictoolschange'));
       }
