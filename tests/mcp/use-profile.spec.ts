@@ -50,24 +50,65 @@ function expectNoToken(text: string) {
 const textOf = (result: unknown) => JSON.stringify((result as { content?: unknown }).content);
 
 type Created = { clientName: string, background: boolean, profile?: { variant: string, profileDirName: string } };
+// Which backend ran a tool call: the variant it was created with ('env' = none chosen), and whether a dispose had
+// already started on it.
+type Served = { profile: string, name: string, afterDispose: boolean };
 
-async function startRouter(config: object, env: Args = vault, connecting?: Promise<void>) {
+type RouterSetup = {
+  env?: Args;
+  // The first backend stays connecting until this promise settles.
+  connecting?: Promise<void>;
+};
+
+// A gate: `hold` returns the function that opens it.
+function gate() {
+  let open!: () => void;
+  const promise = new Promise<void>(resolve => open = resolve);
+  return { promise, open };
+}
+
+async function startRouter(config: object, { env = vault, connecting }: RouterSetup = {}) {
   const created: Created[] = [];
+  const served: Served[] = [];
+  const heldCalls = new Map<string, Promise<void>>();
+  let heldDispose: Promise<void> | undefined;
   let disposed = 0;
   class FakeBackend extends EventEmitter {
+    private _disposing = false;
     constructor(readonly profile: string | undefined) {
       super();
     }
     async callTool(name: string) {
+      served.push({ profile: this.profile ?? 'env', name, afterDispose: this._disposing });
+      await heldCalls.get(name);
       return { content: [{ type: 'text' as const, text: name }] };
     }
     dynamicTools() {
       return [{ name: `page_tool_of_${this.profile ?? 'env'}` }];
     }
     async dispose() {
+      this._disposing = true;
+      await heldDispose;
       disposed++;
     }
   }
+  // Holds every call of that tool until the returned function runs.
+  const holdCalls = (name: string) => {
+    const { promise, open } = gate();
+    heldCalls.set(name, promise);
+    return () => {
+      heldCalls.delete(name);
+      open();
+    };
+  };
+  const holdDispose = () => {
+    const { promise, open } = gate();
+    heldDispose = promise;
+    return () => {
+      heldDispose = undefined;
+      open();
+    };
+  };
   const factory = {
     name: 'fake', nameInConfig: 'fake', version: '0',
     toolSchemas: tools.filteredTools({ capabilities: [] }).map(tool => tool.schema),
@@ -93,7 +134,7 @@ async function startRouter(config: object, env: Args = vault, connecting?: Promi
   await router.initialize?.(clientInfo);
   const signal = new AbortController().signal;
   const call = (agente: string, name: string, args: Args = {}) => router.callTool(name, { ...args, _meta: { agente } }, signal);
-  return { routed, router, call, created, disposed: () => disposed };
+  return { routed, router, call, created, served, holdCalls, holdDispose, disposed: () => disposed };
 }
 
 const extensionConfig = { extension: true, browser: {} };
@@ -152,7 +193,7 @@ test('a switch closes the backends of every agent, and the next calls reopen the
 
 test('a switch while main is still connecting to the old profile disposes that connection once it is up', async () => {
   let connected!: () => void;
-  const { router, call, created, disposed } = await startRouter(extensionConfig, vault, new Promise<void>(resolve => connected = resolve));
+  const { router, call, created, served, disposed } = await startRouter(extensionConfig, { connecting: new Promise<void>(resolve => connected = resolve) });
   try {
     const first = call('main', 'browser_navigate');
     await expect.poll(() => created.length).toBe(1);
@@ -160,7 +201,11 @@ test('a switch while main is still connecting to the old profile disposes that c
     await call('main', 'browser_navigate');
     expect(created.at(-1)?.profile?.variant).toBe('jacira');
     connected();
-    await first;
+    // The call that was waiting for the old connection never runs there: it would act logged in as the old profile.
+    const firstResult = await first;
+    expect(firstResult.isError).toBe(true);
+    expect(parseResponse(firstResult as any)?.error).toContain('Not run: this conversation switched to profile jacira (folder "Profile 6") while this call waited for its browser. Call it again');
+    expect(served).toEqual([{ profile: 'jacira', name: 'browser_navigate', afterDispose: false }]);
     expect(parseResponse(await switched as any)?.result).toContain('Closed the browser of 1 agent(s)');
     expect(disposed()).toBe(1);
     // The late backend of the old profile never became the current main.
@@ -201,7 +246,7 @@ test('the description lists the usable profiles with the user\'s aliases and the
   await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'someone@example.com' }, 'Profile 13': { name: 'Gabriel' } } } }));
   const aliases = testInfo.outputPath('aliases.json');
   await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'padrao': 'eu', 'outro': [''] }));
-  const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { ...vault, PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases });
+  const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { env: { ...vault, PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases } });
   try {
     const description = routed.toolSchemas.find(schema => schema.name === 'browser_use_profile')!.description;
     expect(description).toContain('Profiles: jacira (also called "minha mãe", "mother"; Chrome name "someone@example.com"; folder "Profile 6"); padrao (also called "eu"; Chrome name "Gabriel"; folder "Profile 13") - in use when this conversation started.');

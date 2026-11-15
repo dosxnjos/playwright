@@ -81,7 +81,13 @@ type RouterOptions = {
 // Upper bound for the switch to wait for the old backends to close (a create still connecting can take 30 s).
 const SWITCH_WAIT_MS = 10_000;
 
-type Entry = { promise: Promise<ServerBackend>, inFlight: number, idle?: NodeJS.Timeout };
+type Entry = {
+  promise: Promise<ServerBackend>,
+  inFlight: number,
+  idle?: NodeJS.Timeout,
+  // Set by browser_use_profile when it drops this entry: the profile the conversation switched to, as the answers name it.
+  revokedFor?: string,
+};
 
 class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [] }> implements ServerBackend {
   private _entries = new Map<string, Entry>();
@@ -132,7 +138,19 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     entry.inFlight++;
     clearTimeout(entry.idle);
     try {
-      const result = await (await entry.promise).callTool(name, args, signal);
+      let backend: ServerBackend;
+      try {
+        backend = await entry.promise;
+      } catch (e) {
+        if (entry.revokedFor)
+          return errorResult(notRunText(entry.revokedFor));
+        throw e;
+      }
+      // Patch 9: browser_use_profile dropped this entry while the call waited for its browser. Never run it there: it
+      // would act logged in as the old profile.
+      if (entry.revokedFor)
+        return errorResult(notRunText(entry.revokedFor));
+      const result = await backend.callTool(name, args, signal);
       // The backend already disposed itself on close (browserBackend.ts isClose); 'disconnected' may not follow.
       if (!result.isError && name === 'browser_close')
         this._drop(key, entry, false);
@@ -200,9 +218,13 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     this._profile = extensionProfileOf(chosen);
     // The group names of the agents came from main's label in the old profile.
     this._mainLabel = undefined;
+    const described = describeVariant(chosen, names());
     const entries = [...this._entries];
-    for (const [key, entry] of entries)
+    for (const [key, entry] of entries) {
+      // Before the drop, synchronously: a call already waiting on this entry checks it before using the backend.
+      entry.revokedFor = described;
       this._drop(key, entry, false);
+    }
     // D6: the variant and its folder only, never the token.
     routerDebug(`use profile variant=${chosen.name} profileDir=${chosen.profileDirName} closing=${entries.length}`);
     // Wait for the old relays to go before answering: their agent tabs close (patch 3), and the next call does not race
@@ -318,6 +340,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
 
 const textResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Result\n${text}` }] });
 const errorResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Error\n${text}` }], isError: true });
+const notRunText = (profile: string) => `Not run: this conversation switched to profile ${profile} while this call waited for its browser. Call it again; it opens in that profile.`;
 
 const shortType = (tipo: unknown) => tipo === 'general-purpose' ? 'gp' : tipo === 'workflow-subagent' ? 'wf'
   : typeof tipo === 'string' && ID.test(tipo) ? tipo.slice(0, 16) : 'agente';
