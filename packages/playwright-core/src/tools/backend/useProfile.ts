@@ -69,7 +69,7 @@ export function pickableVariants(env: NodeJS.ProcessEnv = process.env, all = vau
   return all.filter(variant => allow.includes(variant.name) || variant.name === start);
 }
 
-export const usableVariant =(variant: VaultVariant): variant is Required<VaultVariant> => !!variant.token && !!variant.profileDirName;
+export const usableVariant = (variant: VaultVariant): variant is Required<VaultVariant> => !!variant.token && !!variant.profileDirName;
 
 // What the relay needs (backend/extensionSession.ts relayScope).
 export function extensionProfileOf(variant: Required<VaultVariant>): ExtensionProfile {
@@ -169,8 +169,8 @@ export function unusableVariantError(name: string, variants: VaultVariant[], all
   const found = variants.find(variant => variant.name === name);
   const why = !found && all.some(variant => variant.name === name) ? `profile "${name}" is not in ${ALLOW_ENV}`
     : !found ? `there is no profile named "${name}"`
-    : !found.token ? `profile "${name}" has no extension token (${TOKEN_PREFIX}${name})`
-      : `profile "${name}" has no Chrome profile folder registered (${PROFILE_PREFIX}${name})`;
+      : !found.token ? `profile "${name}" has no extension token (${TOKEN_PREFIX}${name})`
+        : `profile "${name}" has no Chrome profile folder registered (${PROFILE_PREFIX}${name})`;
   const valid = variants.filter(usableVariant).map(variant => variant.name);
   return `Cannot switch: ${why}. Nothing changed. Valid profiles: ${valid.length ? valid.join(', ') : 'none'}.`;
 }
