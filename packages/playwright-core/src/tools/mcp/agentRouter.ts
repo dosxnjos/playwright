@@ -25,7 +25,7 @@ import path from 'path';
 import debug from 'debug';
 
 import { relayScope } from '../backend/extensionSession';
-import { USE_PROFILE_TOOL, chromeProfileNames, describeVariant, extensionProfileOf, extensionUserDataDir, notApplicableText, profileAliases, startVariant, unusableVariantError, usableVariant, useProfileDescription, vaultVariants } from '../backend/useProfile';
+import { USE_PROFILE_TOOL, chromeProfileNames, describeVariant, extensionProfileOf, extensionUserDataDir, notApplicableText, pickableVariants, profileAliases, startVariant, unusableVariantError, usableVariant, useProfileDescription, vaultVariants } from '../backend/useProfile';
 
 import type { CallToolRequest, CallToolResult, ClientInfo, ServerBackend, ServerBackendFactory, Tool } from '../utils/mcp/server';
 import type { FullConfig } from './config';
@@ -65,7 +65,7 @@ export function withAgentRouting(inner: ServerBackendFactory, config: FullConfig
   // Patch 9: the description of browser_use_profile lists the vault, read once at start (decision D1).
   const toolSchemas = inner.toolSchemas.map(schema => schema.name === USE_PROFILE_TOOL && extension ? {
     ...schema,
-    description: useProfileDescription(vaultVariants(env), profileLabels(), startVariant(env)),
+    description: useProfileDescription(pickableVariants(env), profileLabels(), startVariant(env)),
   } : schema);
   return { ...inner, toolSchemas, create: async clientInfo => new AgentRouter(inner, clientInfo, { extension, env, startProfileDirName, profileLabels }) };
 }
@@ -244,11 +244,12 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     if (!this._options.extension)
       return textResult(notApplicableText());
     const name = typeof profile === 'string' ? profile : '';
-    const variants = vaultVariants(this._options.env);
+    const all = vaultVariants(this._options.env);
+    const variants = pickableVariants(this._options.env, all);
     const chosen = variants.find(variant => variant.name === name);
-    // D4: a variant without a token or a profile folder changes nothing.
+    // D4: a variant without a token or a profile folder, or left out of PLAYWRIGHT_MCP_USE_PROFILE_ALLOW, changes nothing.
     if (!chosen || !usableVariant(chosen))
-      return errorResult(unusableVariantError(name, variants));
+      return errorResult(unusableVariantError(name, variants, all));
     const names = this._options.profileLabels;
     if (this._isCurrent(chosen))
       return textResult(`Already using profile ${describeVariant(chosen, names())}. Nothing changed.`);

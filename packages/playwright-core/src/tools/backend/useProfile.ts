@@ -56,7 +56,20 @@ export function vaultVariants(env: NodeJS.ProcessEnv = process.env): VaultVarian
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export const usableVariant = (variant: VaultVariant): variant is Required<VaultVariant> => !!variant.token && !!variant.profileDirName;
+const ALLOW_ENV = 'PLAYWRIGHT_MCP_USE_PROFILE_ALLOW';
+
+// The variants a conversation may pick and the tool lists: PLAYWRIGHT_MCP_USE_PROFILE_ALLOW (comma-separated variant
+// names, set by the vault's owner) limits them, so an instruction injected in a page cannot reach every account of the
+// vault. The start variant always stays, so the conversation can switch back. Unset or empty: every variant.
+export function pickableVariants(env: NodeJS.ProcessEnv = process.env, all = vaultVariants(env)): VaultVariant[] {
+  const allow = (env[ALLOW_ENV] ?? '').split(',').map(name => name.trim()).filter(Boolean);
+  if (!allow.length)
+    return all;
+  const start = startVariant(env)?.name;
+  return all.filter(variant => allow.includes(variant.name) || variant.name === start);
+}
+
+export const usableVariant =(variant: VaultVariant): variant is Required<VaultVariant> => !!variant.token && !!variant.profileDirName;
 
 // What the relay needs (backend/extensionSession.ts relayScope).
 export function extensionProfileOf(variant: Required<VaultVariant>): ExtensionProfile {
@@ -149,9 +162,11 @@ export function notApplicableText(): string {
   return 'No Chrome profile to switch: this session is not running with --extension (it has a browser of its own). Continuing in the same browser.';
 }
 
-export function unusableVariantError(name: string, variants: VaultVariant[]): string {
+// `variants`: the pickable ones; `all`: the whole vault.
+export function unusableVariantError(name: string, variants: VaultVariant[], all = variants): string {
   const found = variants.find(variant => variant.name === name);
-  const why = !found ? `there is no profile named "${name}"`
+  const why = !found && all.some(variant => variant.name === name) ? `profile "${name}" is not in ${ALLOW_ENV}`
+    : !found ? `there is no profile named "${name}"`
     : !found.token ? `profile "${name}" has no extension token (${TOKEN_PREFIX}${name})`
       : `profile "${name}" has no Chrome profile folder registered (${PROFILE_PREFIX}${name})`;
   const valid = variants.filter(usableVariant).map(variant => variant.name);

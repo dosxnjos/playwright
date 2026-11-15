@@ -307,6 +307,24 @@ test('an unusable profile is an error that lists the valid ones and changes noth
   }
 });
 
+test('PLAYWRIGHT_MCP_USE_PROFILE_ALLOW limits the profiles a conversation can pick, the start one always included', async () => {
+  const env = { ...vault, PLAYWRIGHT_MCP_EXTENSION_TOKEN__andressa: 'dummy-andressa', PLAYWRIGHT_MCP_PROFILE_DIR_NAME__andressa: 'Profile 7', PLAYWRIGHT_MCP_USE_PROFILE_ALLOW: ' jacira , outro' };
+  const { routed, router, call, created } = await startRouter(extensionConfig, { env });
+  try {
+    const description = routed.toolSchemas.find(schema => schema.name === 'browser_use_profile')!.description!;
+    expect(description).toContain('Profiles: jacira (folder "Profile 6"); padrao (folder "Profile 13") - in use when this conversation started.');
+    expect(description).not.toContain('andressa');
+    const refused = await call('main', 'browser_use_profile', { profile: 'andressa' });
+    expect(refused.isError).toBe(true);
+    expect(parseResponse(refused as any)?.error).toBe('Cannot switch: profile "andressa" is not in PLAYWRIGHT_MCP_USE_PROFILE_ALLOW. Nothing changed. Valid profiles: jacira, padrao.');
+    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'jacira' }) as any)?.result).toContain('Now using profile jacira');
+    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'padrao' }) as any)?.result).toContain('Now using profile padrao');
+    expect(created).toHaveLength(0);
+  } finally {
+    await router.dispose?.();
+  }
+});
+
 test('the description lists the usable profiles with the user\'s aliases and the names Chrome shows, never a token', async ({}, testInfo) => {
   const userDataDir = testInfo.outputPath('user-data');
   await fs.promises.mkdir(userDataDir, { recursive: true });
