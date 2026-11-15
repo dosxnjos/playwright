@@ -103,6 +103,15 @@ function main() {
     return 4;
   }
   console.log(`Doppler: ${secret} gravado em harness/prd (releitura confere).`);
+  // House rule (cerebro/temas/harness/memoria-entre-projetos.md § Ao criar um secret novo): the literal lives
+  // once in prd and dev holds a reference to it. Rotations find it already there; a new variant gets it here.
+  const reference = '${harness.prd.' + secret + '}';
+  const dev = ['--project', 'harness', '--config', 'dev'];
+  const devRaw = doppler(['secrets', 'get', secret, ...dev, '--raw', '--plain']);
+  if (devRaw.status !== 0 || devRaw.stdout.trim() !== reference) {
+    const ref = doppler(['secrets', 'set', `${secret}=${reference}`, ...dev, '--silent']);
+    console.log(ref.status === 0 ? `Doppler: harness/dev agora referencia o prd.` : `Doppler: falhou criar a referencia em harness/dev (codigo ${ref.status}); o prd esta certo.`);
+  }
 
   // Read again right before writing: Claude Code writes this file all the time and the Doppler round trip
   // took seconds, so the text read above may be stale.
