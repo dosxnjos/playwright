@@ -108,6 +108,9 @@ export type TraceInfo = { name: string, isolatedContext?: string };
 
 // Actions are paced by this delay when the cursor is shown, giving it time to travel.
 const kCursorDuration = 800;
+// Fork: how long a current tab that Chrome detached from the debugger may take to come back (the extension announces
+// it again after 150 ms, and at most once every 3 s: ownedTab.ts).
+const kLostTabReturnMs = 3000;
 
 export class Context {
   readonly config: ContextConfig;
@@ -119,6 +122,8 @@ export class Context {
   private _browserContexts = new Map<string | undefined, Promise<playwrightTypes.BrowserContext>>();
   private _tabs: Tab[] = [];
   private _currentTab: Tab | undefined;
+  // Fork (extension mode): the current tab whose page closed while the tab may stay open in Chrome (see _onPageClosed).
+  private _lostCurrentTab: { index: number, url: string, time: number } | undefined;
   private _routes: RouteEntry[] = [];
   private _video: {
     params: VideoParams;
@@ -243,6 +248,8 @@ export class Context {
       throw new Error(`Tab ${index} not found`);
     const url = tab.page.url();
     await tab.page.close();
+    // Fork: a tab closed on request does not come back.
+    this._lostCurrentTab = undefined;
     return url;
   }
 
@@ -377,6 +384,18 @@ export class Context {
 
   private _onPageCreated(page: playwrightTypes.Page, isolatedContext: string | undefined) {
     const tab = new Tab(this, page, isolatedContext, tab => this._onPageClosed(tab));
+    const lost = this._lostCurrentTab;
+    if (lost && Date.now() - lost.time >= kLostTabReturnMs)
+      this._lostCurrentTab = undefined;
+    if (lost && this._lostCurrentTab && page.url() === lost.url) {
+      // Fork: the tab that Chrome detached from the debugger is back. It is current again, at its old place. A blank tab
+      // that a tool call opened in between (no tab was left) stays open.
+      this._lostCurrentTab = undefined;
+      this._tabs.splice(Math.min(lost.index, this._tabs.length), 0, tab);
+      this._setCurrentTab(tab);
+      this._startPageVideo(page).catch(() => {});
+      return;
+    }
     this._tabs.push(tab);
     if (!this._currentTab)
       this._setCurrentTab(tab);
@@ -388,6 +407,12 @@ export class Context {
     if (index === -1)
       return;
     this._tabs.splice(index, 1);
+
+    // Fork (extension mode): Chrome detaches the debugger from a tab that stays open when the tab loads a frame that
+    // extensions may not debug, such as the frame of its PDF viewer. The extension announces the tab again a moment
+    // later (ownedTab.ts, _reannounceLater) and it comes back as a new page; _onPageCreated gives it back its place.
+    if (this.config.extension && this._currentTab === tab)
+      this._lostCurrentTab = { index, url: tab.page.url(), time: Date.now() };
 
     if (this._currentTab === tab)
       this._setCurrentTab(this._tabs[Math.min(index, this._tabs.length - 1)]);

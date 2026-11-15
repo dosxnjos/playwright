@@ -95,6 +95,28 @@ test('client controls the tab again after a frame with an unknown scheme detache
   });
 });
 
+// Fork: Chrome's PDF viewer is the frame of an extension too. Seen on 15/11/2026: a click that showed a PDF in an iframe
+// closed the page of the agent; the tab came back at the end of the list and another tab was current.
+test('tab detached by a PDF frame comes back current, at its place', async ({ user, connectWithToken, server }) => {
+  const client = await connectWithToken('worker');
+  await client.navigate('Alpha');
+  await client.openTab('Origin');
+  await client.openTab('Beta');
+  await client.selectTab('Origin');
+  const detaches = await recordDebuggerDetach(user);
+
+  await user.pageOf('Origin').evaluate(src => {
+    const iframe = document.createElement('iframe');
+    iframe.src = src;
+    document.body.appendChild(iframe);
+  }, server.PREFIX + '/empty.pdf');
+  await expect.poll(detaches).toEqual([{ source: { tabId: await user.tabId('Origin') }, reason: 'target_closed' }]);
+
+  await expect.poll(client.tabs).toEqual(['Alpha', 'Origin', 'Beta']);
+  expect(await client.currentTab()).toBe('Origin');
+  expect(await client.snapshot()).toContain('Page Origin');
+});
+
 testWithFrameInjector('client reports an error when the frame of another extension detaches the debugger', {
   annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/43230' },
 }, async ({ user, connectWithToken }) => {
