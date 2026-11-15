@@ -337,6 +337,31 @@ test('without --extension the tool answers that it does not apply', async ({ cli
   }
 });
 
+test('a browser that cannot start fails the call, keeps the server up and prints no token', async ({ startClient }, testInfo) => {
+  // Node prints an unhandled spawn error with its spawnargs, and the last one is the connect page URL with the token.
+  const missing = testInfo.outputPath('no-such-chrome.exe');
+  const { client, stderr } = await startClient({
+    args: ['--extension'],
+    env: {
+      ...vault,
+      PLAYWRIGHT_MCP_EXECUTABLE_PATH: missing,
+      PWTEST_EXTENSION_USER_DATA_DIR: testInfo.outputPath('user-data'),
+      PLAYWRIGHT_MCP_PROFILE_ALIASES: testInfo.outputPath('no-aliases.json'),
+      PWTEST_EXTENSION_CONNECT_TIMEOUT: '1000',
+    },
+  });
+  const responses: string[] = [];
+  responses.push(textOf(await client.callTool({ name: 'browser_use_profile', arguments: { profile: 'jacira' } })));
+  for (let i = 0; i < 2; i++) {
+    const result = await client.callTool({ name: 'browser_navigate', arguments: { url: 'about:blank' } });
+    responses.push(textOf(result));
+    expect(result.isError).toBe(true);
+    expect(parseResponse(result as any)?.error).toContain(`Could not start the browser at ${missing}: ENOENT`);
+  }
+  expectNoToken(responses.join('\n'));
+  expectNoToken(stderr());
+});
+
 test('the chosen token and profile folder reach the connect page, and no log line has a token', async ({ startClient }, testInfo) => {
   // A stub browser: records its arguments and never connects, so each browser call fails after the short timeout.
   const stub = testInfo.outputPath('browser-stub.js');

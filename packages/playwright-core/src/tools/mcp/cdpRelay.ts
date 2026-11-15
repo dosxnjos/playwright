@@ -293,11 +293,22 @@ export class CDPRelayServer {
     args.push(href);
     // Fork: Windows cannot start a .js file, and the Chrome stub of tests/extension is one: run it with node.
     const [command, commandArgs] = executablePath.endsWith('.js') ? [process.execPath, [executablePath, ...args]] : [executablePath, args];
-    spawn(command, commandArgs, {
+    const child = spawn(command, commandArgs, {
       windowsHide: true,
       detached: true,
       shell: false,
       stdio: 'ignore',
+    });
+    // Fork (patch 9): an executable that cannot start (ENOENT, EACCES) emits 'error' carrying its spawnargs, and the
+    // connect page URL among them has the token. Unhandled, Node prints all of it to stderr (which Claude Code keeps on
+    // disk) and the server exits. Report the code and the path only, never the error object.
+    await new Promise<void>((resolve, reject) => {
+      child.once('spawn', () => resolve());
+      child.on('error', error => {
+        const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+        debugLogger(`Could not start the browser at ${executablePath}: ${code}`);
+        reject(new Error(`Could not start the browser at ${executablePath}: ${code}`));
+      });
     });
   }
 
