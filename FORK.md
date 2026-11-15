@@ -16,8 +16,9 @@ The rule of the fork: carry only what upstream does not do. History of how it go
 
 **Last sync:** 15/11/2026, `main` = `908d32b77` on top of upstream `8534271f0` (upstream `main` of 12/11, after
 #44047). Extension `0.5.0.3`. Checked in real Chrome (Profile 13) on 15/11: label, navigate, snapshot, screenshot of a
-hidden tab (178 ms and 2.4 s), no stolen focus, close without leftovers. Not measured there: a tab never shown
-(`revealed=true`) and the window focus coming from another app.
+hidden tab (178 ms and 2.4 s), no stolen focus; the close left only the agent tab the user was looking at, in the
+gray group (§ Tab ownership, "Tab in front of the user"). One client, no sub-agent. Not measured there: a tab never
+shown (`revealed=true`) and the window focus coming from another app.
 
 ## The patches (one commit each on the 15/11 base)
 
@@ -139,7 +140,9 @@ created on the caller's first tool call by the same factory the HTTP mode uses p
   markers (periodic sweep disposes the agent, unknown/`main` markers only deleted, the caller's own marker consumed by
   its call without losing its state, no folder without a valid `sessao`, folder removed on session end), with
   `PLAYWRIGHT_MCP_AGENT_RELEASE_DIR` under the test output. The folder test (`:214`) can fail under load (10 s poll of
-  the marker folder): it passed 4/4 alone on 13/11. Extension mode was checked by hand on 03/10/2026 and on 15/11/2026.
+  the marker folder): it passed 4/4 alone on 13/11. Extension mode was checked by hand on 03/10/2026 (several agents)
+and in the 13/11 rehearsal (headless Chromium, a sub-agent through the carrier); the 15/11 real-Chrome check had one
+client only.
 - **Another machine:** copy the hook from `C:\Dev\cerebro\harness-espelho\` to `~/.claude/hooks/` and add the
   PreToolUse entry of roadmap 2.2 to `~/.claude/settings.json`; without it the agents of a session share one tab again.
 
