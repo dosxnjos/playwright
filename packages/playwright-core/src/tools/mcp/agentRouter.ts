@@ -234,7 +234,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
   }
 
   // Patch 9 (roadmap/2026-11-15-perfil-por-conversa.md). Synchronous up to the drop, so two switches at the same time
-  // end on the last one and no agent gets a backend of a profile that is no longer chosen.
+  // end on the last one (the earlier one answers an error naming it), and no call runs on a backend of a profile that
+  // is no longer chosen (callTool checks `revokedFor`).
   private async _useProfile(profile: unknown, caller: string): Promise<CallToolResult> {
     // D5: no extension, no profile (an `ia:*` session runs an isolated chromium).
     if (!this._options.extension)
@@ -273,8 +274,17 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     // Wait for the old relays to go before answering: their agent tabs close (patch 3), and the next call does not race
     // them. Bounded: a backend still connecting to the old profile is disposed whenever its create ends.
     const disposed = Promise.allSettled(entries.map(([, entry]) => entry.promise.then(backend => backend.dispose?.())));
-    await Promise.race([disposed, new Promise(resolve => setTimeout(resolve, SWITCH_WAIT_MS).unref())]);
-    const closed = entries.length ? `Closed the browser of ${entries.length} agent(s) of this conversation in the old profile.` : 'No browser was open.';
+    const waitMs = Number(this._options.env.PWTEST_USE_PROFILE_SWITCH_WAIT_MS) || SWITCH_WAIT_MS;
+    const allClosed = await Promise.race([disposed.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), waitMs).unref())]);
+    const closed = !entries.length ? 'No browser was open.'
+      : allClosed ? `Closed the browser of ${entries.length} agent(s) of this conversation in the old profile.`
+        : `Asked the browser of ${entries.length} agent(s) of this conversation in the old profile to close; still closing after ${waitMs / 1000} s.`;
+    // Another switch ran while this one waited: its profile is the one in use, never answer as if this one won.
+    const current = this._profile?.variant;
+    if (current !== chosen.name) {
+      const inUse = variants.find(variant => variant.name === current);
+      return errorResult(`Another call switched this conversation to profile ${inUse ? describeVariant(inUse, names()) : current} while this one was closing the old browsers. The profile in use is ${current}; call browser_use_profile again if this task needs ${chosen.name}. ${closed}`);
+    }
     return textResult(`Now using profile ${describeVariant(chosen, names())}. ${closed} The next browser call opens in this profile.${relabel(caller)}`);
   }
 

@@ -259,6 +259,30 @@ test('an agent whose browser another agent\'s switch closed is told so once, mid
   }
 });
 
+test('two switches at the same time: the late answer names the profile in use, and a slow close says so', async () => {
+  const env = { ...vault, PLAYWRIGHT_MCP_EXTENSION_TOKEN__andressa: 'dummy-andressa', PLAYWRIGHT_MCP_PROFILE_DIR_NAME__andressa: 'Profile 7', PWTEST_USE_PROFILE_SWITCH_WAIT_MS: '300' };
+  const { router, call, created, holdDispose } = await startRouter(extensionConfig, { env });
+  try {
+    await call('main', 'browser_navigate');
+    const release = holdDispose();
+    const toJacira = call('main', 'browser_use_profile', { profile: 'jacira' });
+    const toAndressa = await call('a1', 'browser_use_profile', { profile: 'andressa' });
+    expect(parseResponse(toAndressa as any)?.result).toContain('Now using profile andressa (folder "Profile 7"). No browser was open.');
+    const late = await toJacira;
+    expect(late.isError).toBe(true);
+    const error = parseResponse(late as any)?.error;
+    expect(error).toContain('Another call switched this conversation to profile andressa (folder "Profile 7") while this one was closing the old browsers. The profile in use is andressa; call browser_use_profile again if this task needs jacira.');
+    expect(error).toContain('still closing');
+    expect(error).not.toContain('Closed the browser');
+    release();
+    await call('main', 'browser_navigate');
+    expect(created.at(-1)?.profile?.variant).toBe('andressa');
+    expect(textOf(late) + textOf(toAndressa)).not.toContain('dummy-andressa');
+  } finally {
+    await router.dispose?.();
+  }
+});
+
 test('an unusable profile is an error that lists the valid ones and changes nothing', async () => {
   const { router, call, created, disposed } = await startRouter(extensionConfig);
   try {
