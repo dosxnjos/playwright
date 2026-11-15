@@ -105,6 +105,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
   // Undefined = the env's token and profile (the wrapper's folder table already applied, decision D3).
   private _profile: ExtensionProfile | undefined;
   private _options: RouterOptions;
+  // Patch 9: agents a browser_use_profile of another agent switched, with the note their next result carries.
+  private _switchNotes = new Map<string, string>();
 
   constructor(inner: ServerBackendFactory, clientInfo: ClientInfo, options: RouterOptions) {
     super();
@@ -127,14 +129,35 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     const meta = (args._meta && typeof args._meta === 'object' ? args._meta : {}) as { agente?: unknown, agenteTipo?: unknown, sessao?: unknown };
     if (typeof meta.sessao === 'string' && ID.test(meta.sessao))
       this._watch(meta.sessao);
+    const key = typeof meta.agente === 'string' && ID.test(meta.agente) ? meta.agente : MAIN;
     // Patch 9: handled here, before any backend exists, so the switch never opens a browser in the old profile.
     if (name === USE_PROFILE_TOOL)
-      return await this._useProfile(args.profile);
-    const key = typeof meta.agente === 'string' && ID.test(meta.agente) ? meta.agente : MAIN;
+      return await this._useProfile(args.profile, key);
     // Release ended agents before picking the entry. The caller's own marker is only deleted: an agent that calls is
     // alive (resumed after its SubagentStop, or kept going by another hook), so it keeps its browser.
     this._sweep(key);
-    const entry = this._entryFor(key, meta.agenteTipo);
+    let result: CallToolResult;
+    try {
+      result = await this._callAgent(key, meta.agenteTipo, name, args, signal);
+    } catch (e) {
+      const note = this._takeSwitchNote(key);
+      if (!note)
+        throw e;
+      result = errorResult(e instanceof Error ? e.message : String(e));
+      return withNote(result, note);
+    }
+    // Patch 9: an agent whose browser another agent's switch closed is told once, in its next result.
+    return withNote(result, this._takeSwitchNote(key));
+  }
+
+  private _takeSwitchNote(key: string): string | undefined {
+    const note = this._switchNotes.get(key);
+    this._switchNotes.delete(key);
+    return note;
+  }
+
+  private async _callAgent(key: string, tipo: unknown, name: string, args: NonNullable<CallToolRequest['params']['arguments']>, signal: AbortSignal): Promise<CallToolResult> {
+    const entry = this._entryFor(key, tipo);
     entry.inFlight++;
     clearTimeout(entry.idle);
     try {
@@ -156,6 +179,9 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
         this._drop(key, entry, false);
       if (!result.isError && key === MAIN && name === 'browser_set_group_label')
         this._mainLabel = String(args.label);
+      // Patch 9: the switch closed this browser while the call ran; whatever it answers may not have taken effect.
+      if (entry.revokedFor)
+        return withNote(result, `This call ran while the switch to profile ${entry.revokedFor} closed its browser, so it may not have taken effect.`);
       return result;
     } finally {
       entry.inFlight--;
@@ -202,7 +228,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
 
   // Patch 9 (roadmap/2026-11-15-perfil-por-conversa.md). Synchronous up to the drop, so two switches at the same time
   // end on the last one and no agent gets a backend of a profile that is no longer chosen.
-  private async _useProfile(profile: unknown): Promise<CallToolResult> {
+  private async _useProfile(profile: unknown, caller: string): Promise<CallToolResult> {
     // D5: no extension, no profile (an `ia:*` session runs an isolated chromium).
     if (!this._options.extension)
       return textResult(notApplicableText());
@@ -225,6 +251,13 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
       entry.revokedFor = described;
       this._drop(key, entry, false);
     }
+    // The other agents lost their tabs without asking, and their next call opens in another account: tell them once.
+    // Main too when a sub-agent switched, even with no browser open (its next one opens in the new profile).
+    const told = new Set([...entries.map(([key]) => key), MAIN]);
+    told.delete(caller);
+    this._switchNotes.delete(caller);
+    for (const key of told)
+      this._switchNotes.set(key, `Another agent of this conversation switched it to profile ${described} with browser_use_profile: your tabs in the previous profile were closed, and your next browser call opens in this profile. Make sure it is the account your task needs before you type or submit anything.`);
     // D6: the variant and its folder only, never the token.
     routerDebug(`use profile variant=${chosen.name} profileDir=${chosen.profileDirName} closing=${entries.length}`);
     // Wait for the old relays to go before answering: their agent tabs close (patch 3), and the next call does not race
@@ -340,7 +373,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
 
 const textResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Result\n${text}` }] });
 const errorResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Error\n${text}` }], isError: true });
-const notRunText = (profile: string) => `Not run: this conversation switched to profile ${profile} while this call waited for its browser. Call it again; it opens in that profile.`;
+const withNote = (result: CallToolResult, note: string | undefined): CallToolResult => note ? { ...result, content: [...(result.content ?? []), { type: 'text', text: `### Note\n${note}` }] } : result;
+const notRunText =(profile: string) => `Not run: this conversation switched to profile ${profile} while this call waited for its browser. Call it again; it opens in that profile.`;
 
 const shortType = (tipo: unknown) => tipo === 'general-purpose' ? 'gp' : tipo === 'workflow-subagent' ? 'wf'
   : typeof tipo === 'string' && ID.test(tipo) ? tipo.slice(0, 16) : 'agente';

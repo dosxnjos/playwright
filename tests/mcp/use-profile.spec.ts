@@ -215,6 +215,35 @@ test('a switch while main is still connecting to the old profile disposes that c
   }
 });
 
+test('an agent whose browser another agent\'s switch closed is told so once, mid-call or on its next call', async () => {
+  const { router, call, holdCalls } = await startRouter(extensionConfig);
+  const switchedNote = 'Another agent of this conversation switched it to profile jacira (folder \\"Profile 6\\") with browser_use_profile';
+  try {
+    await call('main', 'browser_navigate');
+    await call('a1', 'browser_navigate');
+    await call('a2', 'browser_navigate');
+    // a1 is mid-call when main switches.
+    const release = holdCalls('browser_click');
+    const click = call('a1', 'browser_click');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const switched = await call('main', 'browser_use_profile', { profile: 'jacira' });
+    expect(textOf(switched)).not.toContain('### Note');
+    release();
+    const clickText = textOf(await click);
+    expect(clickText).toContain(switchedNote);
+    expect(clickText).toContain('closed its browser, so it may not have taken effect.');
+    // Told once: a1's next call has no note, a2's first one has it, main (who switched) never gets it.
+    expect(textOf(await call('a1', 'browser_type'))).not.toContain('### Note');
+    expect(textOf(await call('a2', 'browser_snapshot'))).toContain(switchedNote);
+    expect(textOf(await call('main', 'browser_snapshot'))).not.toContain('### Note');
+    // A sub-agent switches back: main is told, even with no browser open in between.
+    await call('a1', 'browser_use_profile', { profile: 'padrao' });
+    expect(textOf(await call('main', 'browser_snapshot'))).toContain('switched it to profile padrao');
+  } finally {
+    await router.dispose?.();
+  }
+});
+
 test('an unusable profile is an error that lists the valid ones and changes nothing', async () => {
   const { router, call, created, disposed } = await startRouter(extensionConfig);
   try {
