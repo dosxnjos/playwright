@@ -51,9 +51,50 @@ function persist(): void {
   writes = writes.then(() => chrome.storage.session.set({ [STORAGE_KEY]: tabIds })).catch(() => {});
 }
 
+// The longest wait for one agent tab to close (fork, 15/11/2026): a dialog nobody answers must not hold the rest of the
+// client's leave (releaseAll, the gray group of the user's tabs) or a browser_tabs close forever.
+export const AGENT_TAB_CLOSE_CAP_MS = 5000;
+
 // One by one: a batch remove aborts on the first tab that is gone, and every other tab would survive.
 export async function closeTabs(tabIds: number[]): Promise<void> {
-  await Promise.allSettled(tabIds.map(tabId => retryOnDrag(() => chrome.tabs.remove(tabId))));
+  await Promise.allSettled(tabIds.map(closeTabWithoutBeforeUnload));
+}
+
+// Fork (15/11/2026): chrome.tabs.remove runs the page's beforeunload. A page that saw a click and has a beforeunload
+// handler then asks "Leave site?": the tab stays open with the dialog up and the remove never settles (measured,
+// tests/extension/tab-ownership.spec.ts). An agent tab closes the way Playwright's page.close() closes one
+// (runBeforeUnload: false), through the debugger while it is still attached: a dialog already open is dismissed first
+// (a navigation of the agent that waits on it stays on its page), then the beforeunload dialog of the close is
+// accepted. Only on a close: on a navigation the agent answers with browser_handle_dialog. A tab without the debugger
+// (a dead worker's) gets the plain remove, so its dialog stays for the user to answer.
+async function closeTabWithoutBeforeUnload(tabId: number): Promise<void> {
+  const target = { tabId };
+  const acceptBeforeUnload = (source: chrome.debugger.Debuggee, method: string, params?: object) => {
+    if (source.tabId === tabId && method === 'Page.javascriptDialogOpening' && (params as { type?: string } | undefined)?.type === 'beforeunload')
+      chrome.debugger.sendCommand(target, 'Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+  };
+  chrome.debugger.onEvent.addListener(acceptBeforeUnload);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await dismissOpenDialog(tabId);
+    const cap = new Promise<void>(resolve => timer = setTimeout(resolve, AGENT_TAB_CLOSE_CAP_MS));
+    const close = async () => {
+      // The beforeunload dialog of the close only reaches a debugger with the Page domain on (the client's usually is).
+      // Never sent while a dialog is open: the page cannot answer it then, and the call hangs (measured 15/11/2026).
+      await chrome.debugger.sendCommand(target, 'Page.enable').catch(() => {});
+      await retryOnDrag(() => chrome.tabs.remove(tabId));
+    };
+    await Promise.race([close(), cap]);
+  } finally {
+    clearTimeout(timer);
+    chrome.debugger.onEvent.removeListener(acceptBeforeUnload);
+  }
+}
+
+// Dismisses the JavaScript dialog open on the tab, through the debugger. True if there was one. False at once without
+// the debugger, without an open dialog, or when the debugger has the Page domain off (it never saw the dialog).
+export async function dismissOpenDialog(tabId: number): Promise<boolean> {
+  return await chrome.debugger.sendCommand({ tabId }, 'Page.handleJavaScriptDialog', { accept: false }).then(() => true, () => false);
 }
 
 // Runs once per service worker start: the recorded tabs belong to clients of a dead worker. A tab that is the active

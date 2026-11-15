@@ -98,6 +98,36 @@ test('agent tab in front of the user stays when the client leaves, and a popup o
   await expect.poll(user.groups).toEqual([{ title: 'Playwright · worker', color: 'grey', tabs: ['Alpha', 'Beta', 'Opened'] }]);
 });
 
+test('agent tab whose page asks "Leave site?" closes without the dialog: on browser_tabs close, on leave, and with a dialog already open', async ({ user, connectWithToken }) => {
+  // The harness's own Playwright connection accepts every beforeunload dialog when nothing listens to it, and so hides
+  // the bug. A listener that does nothing leaves the dialogs to the extension, as in the Chrome of a person.
+  user.browserContext.on('dialog', () => {});
+  // A page that saw a click and has a beforeunload handler asks before it goes, also when its tab is closed.
+  for (const title of ['Asks', 'AsksOnLeave', 'AsksWhileOpen'])
+    user.definePage(title, `<button>Click me</button><script>window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });</script>`);
+  const client = await connectWithToken('agent', close);
+  await client.navigate('Alpha');
+  for (const title of ['Asks', 'AsksOnLeave', 'AsksWhileOpen']) {
+    await client.openTab(title);
+    await client.selectTab(title);
+    await client.click('e2');
+  }
+
+  // browser_tabs close (Target.closeTarget, i.e. chrome.tabs.remove) used to hang with the dialog up.
+  await client.closeTab('Asks');
+  await expect.poll(() => user.tabs()).not.toContain('Asks');
+
+  // A navigation of the agent waits on the dialog: the dialog is dismissed (the page stays) and the tab closes.
+  await client.selectTab('AsksWhileOpen');
+  expect(await client.runCode(`async page => { await page.goto('${user.urlOf('Beta')}'); }`)).toContain('"beforeunload" dialog');
+
+  await client.close();
+  await expect.poll(user.groups).toEqual([]);
+  expect(await user.tabs()).not.toContain('AsksOnLeave');
+  expect(await user.tabs()).not.toContain('AsksWhileOpen');
+  expect(await user.tabs()).not.toContain('Beta');
+});
+
 test('PLAYWRIGHT_MCP_AGENT_TABS=keep keeps the tabs of the client in a gray group, as upstream', async ({ user, connectWithToken }) => {
   const client = await connectWithToken('agent', { env: { PLAYWRIGHT_MCP_AGENT_TABS: 'keep' } });
   await client.navigate('Alpha');

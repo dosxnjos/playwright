@@ -16,7 +16,7 @@
 
 
 import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
-import { closeTabs, forgetAgentTabs, recordAgentTab, tabsInFrontOfUser } from './agentTabs';
+import { closeTabs, dismissOpenDialog, forgetAgentTabs, recordAgentTab, tabsInFrontOfUser } from './agentTabs';
 
 import type { ChromeListeners } from './chromeListeners';
 import type { ClientSession } from './clientSession';
@@ -131,17 +131,26 @@ export class TabRegistry {
   // Fork (patch 3): the client left, its agent tabs go. Dropped from the table first, so that the session (already
   // closed) gets no event for them; each tab is closed on its own (one that is gone does not stop the others). The tab
   // in front of the user (active tab of a focused window) is never closed: it becomes the user's and goes free.
+  // Closed before the debugger goes (15/11/2026): closeTabs needs it to skip a "Leave site?" dialog (agentTabs.ts).
+  // A tab with a dialog open (a navigation of the agent waiting on "Leave site?") is closed even in front: Chrome brings
+  // a tab to the front when it opens a dialog (measured in headless Chromium, 15/11/2026), and nobody types into a page
+  // behind a dialog; the agent was leaving that page anyway.
   async closeAgentTabs(session: ClientSession): Promise<void> {
     const agentTabs = [...this._tabs.values()].filter(tab => tab.session === session && tab.agent);
+    const withDialog = new Set<number>();
+    await Promise.all(agentTabs.map(async tab => {
+      if (await dismissOpenDialog(tab.tabId))
+        withDialog.add(tab.tabId);
+    }));
     const inFront = await tabsInFrontOfUser(agentTabs.map(tab => tab.tabId));
     for (const tab of agentTabs)
-      tab.agent = !inFront.has(tab.tabId);
+      tab.agent = !inFront.has(tab.tabId) || withDialog.has(tab.tabId);
     const tabs = agentTabs.filter(tab => tab.agent);
     for (const tab of tabs)
       this._tabs.delete(tab.tabId);
     const tabIds = tabs.map(tab => tab.tabId);
-    await Promise.all(tabs.map(tab => tab.dispose()));
     await closeTabs(tabIds);
+    await Promise.all(tabs.map(tab => tab.dispose()));
     // After the close: a worker that dies before it still finds them in the record.
     forgetAgentTabs(agentTabs.map(tab => tab.tabId));
   }

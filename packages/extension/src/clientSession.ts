@@ -15,6 +15,7 @@
  */
 
 
+import { closeTabs } from './agentTabs';
 import { captureReveal } from './captureReveal';
 import { checkCdpMethod, cookieSitesOutside } from './cdpPolicy';
 
@@ -108,14 +109,23 @@ export class ClientSession {
       }
       case 'chrome.tabs.remove': {
         const tabIds = [params[0]].flat() as number[];
+        const agentTabIds = new Set<number>();
         for (const tabId of tabIds) {
           // Fork (carrier): a connect page this client opened, that did not connect in time. Only while no client owns
           // it: with the token the page becomes the blank tab of the client it connected.
           const carried = this._carriedConnectPages.delete(tabId);
-          if (!carried || this._registry.ownerOf(tabId))
-            this._ownedTab({ tabId });
+          if ((!carried || this._registry.ownerOf(tabId)) && this._ownedTab({ tabId }).agent)
+            agentTabIds.add(tabId);
         }
-        return await chrome.tabs.remove(tabIds);
+        // Fork (15/11/2026): Target.closeTarget (browser_tabs close, browser_close) of an agent tab skips its "Leave
+        // site?" dialog, as page.close() does without the extension (agentTabs.ts closeTabs). A tab of the user keeps
+        // the dialog: the user answers it.
+        const userTabIds = tabIds.filter(tabId => !agentTabIds.has(tabId));
+        await Promise.all([
+          closeTabs([...agentTabIds]),
+          userTabIds.length ? chrome.tabs.remove(userTabIds) : undefined,
+        ]);
+        return;
       }
       // Fork (reveal for capture, FORK.md § Foco zero): only a tab that this client owns.
       case 'extension.revealForCapture': {
