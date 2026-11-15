@@ -162,9 +162,10 @@ test('a switch before the first browser call opens no browser, and every agent t
 
 test('a switch closes the backends of every agent, and the next calls reopen them in the new profile', async () => {
   const { router, call, created, disposed } = await startRouter(extensionConfig);
+  const relabel = 'call browser_set_group_label again';
   try {
-    await call('main', 'browser_navigate');
-    await call('a1', 'browser_navigate');
+    await call('main', 'browser_set_group_label', { label: 'tarefa' });
+    await call('a1', 'browser_set_group_label', { label: 'sub' });
     // D3: without a switch, the relay takes the env's token and profile.
     expect(created.map(c => c.profile)).toEqual([undefined, undefined]);
 
@@ -173,17 +174,21 @@ test('a switch closes the backends of every agent, and the next calls reopen the
     expect(parseResponse(same as any)?.result).toContain('Already using profile padrao');
     expect(disposed()).toBe(0);
 
-    // A sub-agent switches: the conversation switches (D2), main included.
+    // A sub-agent switches: the conversation switches (D2), main included. Both had labeled their group, and the new
+    // profile's groups have no label: both are asked to label again.
     const result = await call('a1', 'browser_use_profile', { profile: 'jacira' });
     expect(parseResponse(result as any)?.result).toContain('Closed the browser of 2 agent(s)');
+    expect(parseResponse(result as any)?.result).toContain(relabel);
     expect(disposed()).toBe(2);
 
-    await call('main', 'browser_navigate');
+    expect(textOf(await call('main', 'browser_navigate'))).toContain(relabel);
     await call('a2', 'browser_navigate');
     expect(created.slice(2).map(c => c.profile?.variant)).toEqual(['jacira', 'jacira']);
 
-    // Back to the start variant: now it is a real switch.
-    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'padrao' }) as any)?.result).toContain('Closed the browser of 2 agent(s)');
+    // Back to the start variant: now it is a real switch. Main's new group has no label: no request to label.
+    const back = await call('main', 'browser_use_profile', { profile: 'padrao' });
+    expect(parseResponse(back as any)?.result).toContain('Closed the browser of 2 agent(s)');
+    expect(parseResponse(back as any)?.result).not.toContain(relabel);
     await call('main', 'browser_navigate');
     expect(created.at(-1)?.profile).toEqual({ variant: 'padrao', profileDirName: 'Profile 13' });
   } finally {

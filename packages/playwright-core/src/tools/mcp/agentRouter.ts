@@ -87,6 +87,8 @@ type Entry = {
   idle?: NodeJS.Timeout,
   // Set by browser_use_profile when it drops this entry: the profile the conversation switched to, as the answers name it.
   revokedFor?: string,
+  // The last browser_set_group_label of this agent on this backend.
+  label?: string,
 };
 
 class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [] }> implements ServerBackend {
@@ -177,8 +179,11 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
       // The backend already disposed itself on close (browserBackend.ts isClose); 'disconnected' may not follow.
       if (!result.isError && name === 'browser_close')
         this._drop(key, entry, false);
-      if (!result.isError && key === MAIN && name === 'browser_set_group_label')
-        this._mainLabel = String(args.label);
+      if (!result.isError && name === 'browser_set_group_label') {
+        entry.label = String(args.label);
+        if (key === MAIN)
+          this._mainLabel = entry.label;
+      }
       // Patch 9: the switch closed this browser while the call ran; whatever it answers may not have taken effect.
       if (entry.revokedFor)
         return withNote(result, `This call ran while the switch to profile ${entry.revokedFor} closed its browser, so it may not have taken effect.`);
@@ -253,11 +258,14 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     }
     // The other agents lost their tabs without asking, and their next call opens in another account: tell them once.
     // Main too when a sub-agent switched, even with no browser open (its next one opens in the new profile).
+    // A group label lives in the old relay: the new profile's group has none, so whoever had one is asked again.
+    const labeled = new Set(entries.filter(([, entry]) => entry.label !== undefined).map(([key]) => key));
+    const relabel = (key: string) => labeled.has(key) ? ` ${RELABEL_TEXT}` : '';
     const told = new Set([...entries.map(([key]) => key), MAIN]);
     told.delete(caller);
     this._switchNotes.delete(caller);
     for (const key of told)
-      this._switchNotes.set(key, `Another agent of this conversation switched it to profile ${described} with browser_use_profile: your tabs in the previous profile were closed, and your next browser call opens in this profile. Make sure it is the account your task needs before you type or submit anything.`);
+      this._switchNotes.set(key, `Another agent of this conversation switched it to profile ${described} with browser_use_profile: your tabs in the previous profile were closed, and your next browser call opens in this profile. Make sure it is the account your task needs before you type or submit anything.${relabel(key)}`);
     // D6: the variant and its folder only, never the token.
     routerDebug(`use profile variant=${chosen.name} profileDir=${chosen.profileDirName} closing=${entries.length}`);
     // Wait for the old relays to go before answering: their agent tabs close (patch 3), and the next call does not race
@@ -265,7 +273,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     const disposed = Promise.allSettled(entries.map(([, entry]) => entry.promise.then(backend => backend.dispose?.())));
     await Promise.race([disposed, new Promise(resolve => setTimeout(resolve, SWITCH_WAIT_MS).unref())]);
     const closed = entries.length ? `Closed the browser of ${entries.length} agent(s) of this conversation in the old profile.` : 'No browser was open.';
-    return textResult(`Now using profile ${describeVariant(chosen, names())}. ${closed} The next browser call opens in this profile.`);
+    return textResult(`Now using profile ${describeVariant(chosen, names())}. ${closed} The next browser call opens in this profile.${relabel(caller)}`);
   }
 
   private _isCurrent(variant: { name: string, profileDirName: string }): boolean {
@@ -374,7 +382,8 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
 const textResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Result\n${text}` }] });
 const errorResult = (text: string): CallToolResult => ({ content: [{ type: 'text', text: `### Error\n${text}` }], isError: true });
 const withNote = (result: CallToolResult, note: string | undefined): CallToolResult => note ? { ...result, content: [...(result.content ?? []), { type: 'text', text: `### Note\n${note}` }] } : result;
-const notRunText =(profile: string) => `Not run: this conversation switched to profile ${profile} while this call waited for its browser. Call it again; it opens in that profile.`;
+const RELABEL_TEXT = 'Your tab group in this profile has no label yet: call browser_set_group_label again.';
+const notRunText = (profile: string) => `Not run: this conversation switched to profile ${profile} while this call waited for its browser. Call it again; it opens in that profile.`;
 
 const shortType = (tipo: unknown) => tipo === 'general-purpose' ? 'gp' : tipo === 'workflow-subagent' ? 'wf'
   : typeof tipo === 'string' && ID.test(tipo) ? tipo.slice(0, 16) : 'agente';
