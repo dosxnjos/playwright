@@ -47,7 +47,7 @@ function expectNoToken(text: string) {
     expect(text).not.toContain(dummy);
 }
 
-const textOf = (result: { content?: unknown }) => JSON.stringify(result.content);
+const textOf = (result: unknown) => JSON.stringify((result as { content?: unknown }).content);
 
 type Created = { clientName: string, background: boolean, profile?: { variant: string, profileDirName: string } };
 
@@ -200,7 +200,7 @@ test('the description lists the usable profiles with the user\'s aliases and the
   // Chrome can name a profile after its e-mail address (the real Profile 6 on 15/11), hence the aliases.
   await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'someone@example.com' }, 'Profile 13': { name: 'Gabriel' } } } }));
   const aliases = testInfo.outputPath('aliases.json');
-  await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'padrao': 'eu', 'outro': ['' ] }));
+  await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'padrao': 'eu', 'outro': [''] }));
   const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { ...vault, PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases });
   try {
     const description = routed.toolSchemas.find(schema => schema.name === 'browser_use_profile')!.description;
