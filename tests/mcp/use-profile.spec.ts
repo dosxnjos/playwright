@@ -325,22 +325,26 @@ test('PLAYWRIGHT_MCP_USE_PROFILE_ALLOW limits the profiles a conversation can pi
   }
 });
 
-test('the description lists the usable profiles with the user\'s aliases and the names Chrome shows, never a token', async ({}, testInfo) => {
+test('the description lists the usable profiles with the user\'s aliases or the names Chrome shows, never a token nor an e-mail', async ({}, testInfo) => {
   const userDataDir = testInfo.outputPath('user-data');
   await fs.promises.mkdir(userDataDir, { recursive: true });
-  // Chrome can name a profile after its e-mail address (the real Profile 6 on 15/11), hence the aliases.
-  await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'someone@example.com' }, 'Profile 13': { name: 'Gabriel' } } } }));
+  // Chrome can name a profile after its e-mail address (the real Profile 6 on 15/11), hence the aliases. That name is
+  // personal data the model does not need: it is left out, and so is any Chrome name of a profile with an alias.
+  await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'someone@example.com' }, 'Profile 7': { name: 'other@example.com' }, 'Profile 13': { name: 'Gabriel' } } } }));
   const aliases = testInfo.outputPath('aliases.json');
-  await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'padrao': 'eu', 'outro': [''] }));
-  const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { env: { ...vault, PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases } });
+  await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'outro': [''] }));
+  const env = { ...vault, PLAYWRIGHT_MCP_EXTENSION_TOKEN__andressa: 'dummy-andressa', PLAYWRIGHT_MCP_PROFILE_DIR_NAME__andressa: 'Profile 7', PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases };
+  const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { env });
   try {
     const description = routed.toolSchemas.find(schema => schema.name === 'browser_use_profile')!.description;
-    expect(description).toContain('Profiles: jacira (also called "minha mãe", "mother"; Chrome name "someone@example.com"; folder "Profile 6"); padrao (also called "eu"; Chrome name "Gabriel"; folder "Profile 13") - in use when this conversation started.');
+    expect(description).toContain('Profiles: andressa (folder "Profile 7"); jacira (also called "minha mãe", "mother"; folder "Profile 6"); padrao (Chrome name "Gabriel"; folder "Profile 13") - in use when this conversation started.');
+    expect(description).not.toContain('@');
     expect(description).not.toContain('semperfil');
     expect(description).not.toContain('semtoken');
     expectNoToken(description);
+    expect(description).not.toContain('dummy-andressa');
     // The answer names the profile the same way.
-    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'jacira' }) as any)?.result).toContain('Now using profile jacira (also called "minha mãe", "mother"; Chrome name "someone@example.com"; folder "Profile 6")');
+    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'jacira' }) as any)?.result).toContain('Now using profile jacira (also called "minha mãe", "mother"; folder "Profile 6")');
   } finally {
     await router.dispose?.();
   }

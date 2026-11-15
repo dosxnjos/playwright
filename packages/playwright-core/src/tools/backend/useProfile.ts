@@ -133,13 +133,15 @@ export type ProfileLabels = {
   aliases: Map<string, string[]>;
 };
 
-// `jacira (also called "minha mãe"; Chrome name "Jacira"; folder "Profile 6")`. Never the token.
+// `jacira (also called "minha mãe"; folder "Profile 6")` or `padrao (Chrome name "Gabriel"; folder "Profile 13")`.
+// Never the token. Chrome's name only helps when the user gave no alias, and one that looks like an e-mail address is
+// personal data the model does not need (it goes into every conversation's tools/list): both are left out.
 export function describeVariant(variant: VaultVariant, labels: ProfileLabels): string {
   const aliases = labels.aliases.get(variant.name);
-  const chromeName = variant.profileDirName ? labels.chromeNames.get(variant.profileDirName) : undefined;
+  const chromeName = variant.profileDirName && !aliases ? labels.chromeNames.get(variant.profileDirName) : undefined;
   const parts = [
     aliases ? `also called ${aliases.map(alias => JSON.stringify(alias)).join(', ')}` : undefined,
-    chromeName ? `Chrome name ${JSON.stringify(chromeName)}` : undefined,
+    chromeName && !chromeName.includes('@') ? `Chrome name ${JSON.stringify(chromeName)}` : undefined,
     variant.profileDirName ? `folder "${variant.profileDirName}"` : undefined,
   ].filter(Boolean);
   return parts.length ? `${variant.name} (${parts.join('; ')})` : variant.name;
