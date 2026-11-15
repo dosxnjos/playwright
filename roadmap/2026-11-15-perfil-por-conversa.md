@@ -55,6 +55,24 @@ outro perfil. Descartadas:
    ter a ferramenta depois de `/mcp` → playwright → Reconnect. Caso de teste: a dev-bb (sessão `2b628993`) faz o
    passo 0 de `C:\Dev\univali-docs\docs\estado-2027-1.md` (repostar um PDF na intranet da Univali pelo Profile 6).
 
+## Junto na mesma virada: consertos dos relatos da dev-bb (15/11)
+
+Uma virada só, com um Recarregar só (extensão `0.5.0.4`). Antes do build, juntar numa branch de integração a partir
+de `feat-use-profile`. Resultado completo do workflow `wf_410bb6f7-b28` no journal da sessão `2a309762`.
+- `fix-beforeunload` (`e55ece846`): uma aba do agente com "Sair do site?" deixava o `browser_tabs close` pendurado,
+  e no desconectar a aba não fechava. A revisão aprovou com ressalvas, e duas entram na integração:
+  - o `dismissOpenDialog` só dispensa diálogo do tipo `beforeunload`, porque hoje ele fecha também
+    alert/confirm/prompt numa aba que o usuário está olhando;
+  - o teto de 5 s cobre o `dismissOpenDialog` também.
+  A metade "handle_dialog devolve o modal velho" não se reproduziu.
+- `fix-popup-page-closed` (`3ebb593c6`): a causa é um PDF num iframe; o Chrome desanexa a aba, e o conserto devolve a
+  aba ao lugar dela e como aba atual. O erro "page closed" continua. Contorno para os agentes: interceptar com
+  `page.route` o documento do subframe antes do clique. Ressalva: limpar o registro também no `selectTab`/`newTab`.
+- download (sem código): é limitação de desenho do upstream (`noDefaults`). Entra uma linha no `FORK.md` § Known
+  limitations, com o contorno de vigiar a pasta Downloads.
+- `FORK.md`: patch 3 (diálogo), o ponto novo de conflito em `backend/context.ts`, e a divergência sobre "aba na
+  frente" (linha ~498).
+
 ## Pronto quando
 
 - Numa conversa aberta em `C:\Dev`, `browser_use_profile({profile:"jacira"})` seguido de `browser_navigate` abre no
