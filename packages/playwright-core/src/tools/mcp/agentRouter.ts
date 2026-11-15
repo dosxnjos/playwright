@@ -25,11 +25,12 @@ import path from 'path';
 import debug from 'debug';
 
 import { relayScope } from '../backend/extensionSession';
-import { USE_PROFILE_TOOL, chromeProfileNames, describeVariant, extensionProfileOf, extensionUserDataDir, notApplicableText, startVariant, unusableVariantError, usableVariant, useProfileDescription, vaultVariants } from '../backend/useProfile';
+import { USE_PROFILE_TOOL, chromeProfileNames, describeVariant, extensionProfileOf, extensionUserDataDir, notApplicableText, profileAliases, startVariant, unusableVariantError, usableVariant, useProfileDescription, vaultVariants } from '../backend/useProfile';
 
 import type { CallToolRequest, CallToolResult, ClientInfo, ServerBackend, ServerBackendFactory, Tool } from '../utils/mcp/server';
 import type { FullConfig } from './config';
 import type { ExtensionProfile } from '../backend/extensionSession';
+import type { ProfileLabels } from '../backend/useProfile';
 
 const routerDebug = debug('pw:mcp:router');
 
@@ -56,13 +57,16 @@ export function withAgentRouting(inner: ServerBackendFactory, config: FullConfig
   if (!agentRoutingEnabled(config))
     return inner;
   const extension = !!config.extension;
-  const profileNames = () => chromeProfileNames(extensionUserDataDir(config.browser?.userDataDir, config.browser?.launchOptions?.channel, env));
+  const profileLabels = (): ProfileLabels => ({
+    chromeNames: chromeProfileNames(extensionUserDataDir(config.browser?.userDataDir, config.browser?.launchOptions?.channel, env)),
+    aliases: profileAliases(env),
+  });
   // Patch 9: the description of browser_use_profile lists the vault, read once at start (decision D1).
   const toolSchemas = inner.toolSchemas.map(schema => schema.name === USE_PROFILE_TOOL && extension ? {
     ...schema,
-    description: useProfileDescription(vaultVariants(env), profileNames(), startVariant(env)),
+    description: useProfileDescription(vaultVariants(env), profileLabels(), startVariant(env)),
   } : schema);
-  return { ...inner, toolSchemas, create: async clientInfo => new AgentRouter(inner, clientInfo, { extension, env, profileNames }) };
+  return { ...inner, toolSchemas, create: async clientInfo => new AgentRouter(inner, clientInfo, { extension, env, profileLabels }) };
 }
 
 type RouterOptions = {
@@ -70,8 +74,8 @@ type RouterOptions = {
   extension: boolean;
   // Where the vault is read (PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>, PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>).
   env: NodeJS.ProcessEnv;
-  // Chrome's names of its profiles, by folder.
-  profileNames: () => Map<string, string>;
+  // Chrome's names of its profiles and the user's aliases, for the answers.
+  profileLabels: () => ProfileLabels;
 };
 
 // Upper bound for the switch to wait for the old backends to close (a create still connecting can take 30 s).
@@ -188,7 +192,7 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     // D4: a variant without a token or a profile folder changes nothing.
     if (!chosen || !usableVariant(chosen))
       return errorResult(unusableVariantError(name, variants));
-    const names = this._options.profileNames;
+    const names = this._options.profileLabels;
     if (this._isCurrent(chosen))
       return textResult(`Already using profile ${describeVariant(chosen, names())}. Nothing changed.`);
     this._profile = extensionProfileOf(chosen);

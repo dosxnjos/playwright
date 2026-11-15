@@ -73,8 +73,12 @@ async function startRouter(config: object, env: Args = vault) {
     },
   };
   const clientInfo = { cwd: process.cwd(), clientName: 'test' };
-  // Never the real Chrome's Local State: an empty folder unless the config names one.
-  const routerEnv = { PWTEST_EXTENSION_USER_DATA_DIR: test.info().outputPath('no-chrome'), ...env } as NodeJS.ProcessEnv;
+  // Never the real Chrome's Local State nor the user's alias file: missing ones unless the test names them.
+  const routerEnv = {
+    PWTEST_EXTENSION_USER_DATA_DIR: test.info().outputPath('no-chrome'),
+    PLAYWRIGHT_MCP_PROFILE_ALIASES: test.info().outputPath('no-aliases.json'),
+    ...env,
+  } as NodeJS.ProcessEnv;
   const routed = tools.withAgentRouting(factory as any, config as any, routerEnv);
   const router = await routed.create(clientInfo);
   await router.initialize?.(clientInfo);
@@ -161,17 +165,22 @@ test('an unusable profile is an error that lists the valid ones and changes noth
   }
 });
 
-test('the description lists the usable profiles with the names Chrome shows, never a token', async ({}, testInfo) => {
+test('the description lists the usable profiles with the user\'s aliases and the names Chrome shows, never a token', async ({}, testInfo) => {
   const userDataDir = testInfo.outputPath('user-data');
   await fs.promises.mkdir(userDataDir, { recursive: true });
-  await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'Mãe' }, 'Profile 13': { name: 'Gabriel' } } } }));
-  const { routed, router } = await startRouter({ extension: true, browser: { userDataDir } });
+  // Chrome can name a profile after its e-mail address (the real Profile 6 on 15/11), hence the aliases.
+  await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 6': { name: 'someone@example.com' }, 'Profile 13': { name: 'Gabriel' } } } }));
+  const aliases = testInfo.outputPath('aliases.json');
+  await fs.promises.writeFile(aliases, JSON.stringify({ '_comment': 'who is who', 'jacira': ['minha mãe', 'mother'], 'padrao': 'eu', 'outro': ['' ] }));
+  const { routed, router, call } = await startRouter({ extension: true, browser: { userDataDir } }, { ...vault, PLAYWRIGHT_MCP_PROFILE_ALIASES: aliases });
   try {
     const description = routed.toolSchemas.find(schema => schema.name === 'browser_use_profile')!.description;
-    expect(description).toContain('Profiles (name, then the name Chrome shows and the profile folder): jacira ("Mãe", folder "Profile 6"); padrao ("Gabriel", folder "Profile 13") - in use when this conversation started.');
+    expect(description).toContain('Profiles: jacira (also called "minha mãe", "mother"; Chrome name "someone@example.com"; folder "Profile 6"); padrao (also called "eu"; Chrome name "Gabriel"; folder "Profile 13") - in use when this conversation started.');
     expect(description).not.toContain('semperfil');
     expect(description).not.toContain('semtoken');
     expectNoToken(description);
+    // The answer names the profile the same way.
+    expect(parseResponse(await call('main', 'browser_use_profile', { profile: 'jacira' }) as any)?.result).toContain('Now using profile jacira (also called "minha mãe", "mother"; Chrome name "someone@example.com"; folder "Profile 6")');
   } finally {
     await router.dispose?.();
   }
@@ -199,6 +208,7 @@ test('the chosen token and profile folder reach the connect page, and no log lin
       ...vault,
       PLAYWRIGHT_MCP_EXECUTABLE_PATH: stub,
       PWTEST_EXTENSION_USER_DATA_DIR: userDataDir,
+      PLAYWRIGHT_MCP_PROFILE_ALIASES: testInfo.outputPath('no-aliases.json'),
       PWTEST_EXTENSION_CONNECT_TIMEOUT: '1000',
       DEBUG: 'pw:mcp:*',
     },

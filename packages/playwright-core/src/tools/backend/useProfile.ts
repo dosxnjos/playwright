@@ -20,6 +20,7 @@
 // holds the tool schema, the vault reading and the answer used when the router is not there.
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import * as z from 'zod';
@@ -93,22 +94,53 @@ export function chromeProfileNames(userDataDir: string | undefined): Map<string,
   return names;
 }
 
-// `jacira ("Mãe", folder "Profile 6")`. Never the token.
-export function describeVariant(variant: VaultVariant, names: Map<string, string>): string {
-  const chromeName = variant.profileDirName ? names.get(variant.profileDirName) : undefined;
-  const parts = [chromeName ? JSON.stringify(chromeName) : undefined, variant.profileDirName ? `folder "${variant.profileDirName}"` : undefined].filter(Boolean);
-  return parts.length ? `${variant.name} (${parts.join(', ')})` : variant.name;
+// Who each variant is, in the user's words (`~/.claude/playwright-apelidos.json`, local, never versioned;
+// PLAYWRIGHT_MCP_PROFILE_ALIASES overrides the path), e.g. { "jacira": ["minha mãe", "mother"] }. Keys starting with
+// "_" are comments. Decision D1 reverted on 15/11/2026: the name Chrome gives a profile can be an e-mail address, which
+// does not tell the model whose profile it is. Best effort: an empty map when the file is missing or unreadable.
+export function profileAliases(env: NodeJS.ProcessEnv = process.env): Map<string, string[]> {
+  const aliases = new Map<string, string[]>();
+  try {
+    const file = env.PLAYWRIGHT_MCP_PROFILE_ALIASES || path.join(os.homedir(), '.claude', 'playwright-apelidos.json');
+    for (const [variant, value] of Object.entries(JSON.parse(fs.readFileSync(file, 'utf8')) ?? {})) {
+      const words = (Array.isArray(value) ? value : [value]).filter((word): word is string => typeof word === 'string' && !!word.trim());
+      if (!variant.startsWith('_') && words.length)
+        aliases.set(variant, words.map(word => word.trim()));
+    }
+  } catch {
+  }
+  return aliases;
 }
 
-export function useProfileDescription(variants: VaultVariant[], names: Map<string, string>, start: VaultVariant | undefined): string {
+// What the description and the answers say about a profile.
+export type ProfileLabels = {
+  // Chrome's name, by profile folder.
+  chromeNames: Map<string, string>;
+  // The user's words, by variant.
+  aliases: Map<string, string[]>;
+};
+
+// `jacira (also called "minha mãe"; Chrome name "Jacira"; folder "Profile 6")`. Never the token.
+export function describeVariant(variant: VaultVariant, labels: ProfileLabels): string {
+  const aliases = labels.aliases.get(variant.name);
+  const chromeName = variant.profileDirName ? labels.chromeNames.get(variant.profileDirName) : undefined;
+  const parts = [
+    aliases ? `also called ${aliases.map(alias => JSON.stringify(alias)).join(', ')}` : undefined,
+    chromeName ? `Chrome name ${JSON.stringify(chromeName)}` : undefined,
+    variant.profileDirName ? `folder "${variant.profileDirName}"` : undefined,
+  ].filter(Boolean);
+  return parts.length ? `${variant.name} (${parts.join('; ')})` : variant.name;
+}
+
+export function useProfileDescription(variants: VaultVariant[], labels: ProfileLabels, start: VaultVariant | undefined): string {
   const usable = variants.filter(usableVariant);
   const list = usable.length
-    ? usable.map(variant => describeVariant(variant, names) + (variant.name === start?.name ? ' - in use when this conversation started' : '')).join('; ')
+    ? usable.map(variant => describeVariant(variant, labels) + (variant.name === start?.name ? ' - in use when this conversation started' : '')).join('; ')
     : 'none (no PLAYWRIGHT_MCP_EXTENSION_TOKEN__<name> with its PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<name> in the server env)';
   return [
     'Switch this conversation\'s browser to another Chrome profile, for example when the user says "use my mother\'s profile" or names a person, an account or a profile.',
     'Call it before the first browser call of that task. It closes the tabs that the agents of this conversation opened in the current profile; the next browser call opens in the chosen profile. Other conversations are not affected.',
-    `Profiles (name, then the name Chrome shows and the profile folder): ${list}.`,
+    `Profiles: ${list}.`,
     'Only has an effect when connected via --extension; a harmless no-op otherwise.',
   ].join(' ');
 }
@@ -137,7 +169,7 @@ const useProfile = defineTool({
     name: USE_PROFILE_TOOL,
     title: 'Use another Chrome profile',
     // Replaced by the agent router with the list of profiles (mcp/agentRouter.ts withAgentRouting).
-    description: useProfileDescription([], new Map(), undefined),
+    description: useProfileDescription([], { chromeNames: new Map(), aliases: new Map() }, undefined),
     inputSchema: useProfileSchema,
     type: 'action',
   },
