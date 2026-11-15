@@ -260,7 +260,9 @@ test('the chosen token and profile folder reach the connect page, and no log lin
   expect((await starts())[1]).toContain('--profile-directory=Profile 6');
   expect(connectTokenOf((await starts())[1])).toBe('dummy-jacira');
 
+  // What the model reads: the listed profiles, never a token.
   const { tools: list } = await client.listTools();
+  expect(list.find(tool => tool.name === 'browser_use_profile')?.description).toContain('Profiles: jacira (folder "Profile 6"); padrao (folder "Profile 13") - in use when this conversation started.');
   responses.push(JSON.stringify(list));
   expect(stderr()).toContain('use profile variant=jacira profileDir=Profile 6');
   expectNoToken(responses.join('\n'));
