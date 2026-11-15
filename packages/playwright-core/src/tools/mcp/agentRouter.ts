@@ -181,7 +181,9 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
         this._drop(key, entry, false);
       if (!result.isError && name === 'browser_set_group_label') {
         entry.label = String(args.label);
-        if (key === MAIN)
+        // Only while this backend is still the agent's: a label of a backend browser_use_profile dropped mid-call
+        // must not name the new profile's groups.
+        if (key === MAIN && this._entries.get(key) === entry)
           this._mainLabel = entry.label;
       }
       // Patch 9: the switch closed this browser while the call ran; whatever it answers may not have taken effect.

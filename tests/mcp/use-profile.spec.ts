@@ -161,7 +161,7 @@ test('a switch before the first browser call opens no browser, and every agent t
 });
 
 test('a switch closes the backends of every agent, and the next calls reopen them in the new profile', async () => {
-  const { router, call, created, disposed } = await startRouter(extensionConfig);
+  const { router, call, created, disposed, holdCalls } = await startRouter(extensionConfig);
   const relabel = 'call browser_set_group_label again';
   try {
     await call('main', 'browser_set_group_label', { label: 'tarefa' });
@@ -191,6 +191,16 @@ test('a switch closes the backends of every agent, and the next calls reopen the
     expect(parseResponse(back as any)?.result).not.toContain(relabel);
     await call('main', 'browser_navigate');
     expect(created.at(-1)?.profile).toEqual({ variant: 'padrao', profileDirName: 'Profile 13' });
+
+    // A label that answers after the switch dropped its browser does not name the new profile's groups.
+    const release = holdCalls('browser_set_group_label');
+    const label = call('main', 'browser_set_group_label', { label: 'velho' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await call('main', 'browser_use_profile', { profile: 'jacira' });
+    release();
+    await label;
+    await call('s1', 'browser_navigate');
+    expect(created.at(-1)?.clientName).toBe('test · agente-s1');
   } finally {
     await router.dispose?.();
   }
