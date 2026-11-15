@@ -254,6 +254,13 @@ test('an agent whose browser another agent\'s switch closed is told so once, mid
     // A sub-agent switches back: main is told, even with no browser open in between.
     await call('a1', 'browser_use_profile', { profile: 'padrao' });
     expect(textOf(await call('main', 'browser_snapshot'))).toContain('switched it to profile padrao');
+    // Two switches before a3 calls again: its note names the profile in use, not the first one.
+    await call('a3', 'browser_navigate');
+    await call('a1', 'browser_use_profile', { profile: 'jacira' });
+    await call('a1', 'browser_use_profile', { profile: 'padrao' });
+    const a3Text = textOf(await call('a3', 'browser_snapshot'));
+    expect(a3Text).toContain('switched it to profile padrao');
+    expect(a3Text).not.toContain('jacira');
   } finally {
     await router.dispose?.();
   }

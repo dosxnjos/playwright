@@ -267,8 +267,13 @@ class AgentRouter extends EventEmitter<{ disconnected: [], dynamictoolschange: [
     // Main too when a sub-agent switched, even with no browser open (its next one opens in the new profile).
     // A group label lives in the old relay: the new profile's group has none, so whoever had one is asked again.
     const labeled = new Set(entries.filter(([, entry]) => entry.label !== undefined).map(([key]) => key));
+    for (const [key, note] of this._switchNotes) {
+      if (note.includes(RELABEL_TEXT))
+        labeled.add(key);
+    }
     const relabel = (key: string) => labeled.has(key) ? ` ${RELABEL_TEXT}` : '';
-    const told = new Set([...entries.map(([key]) => key), MAIN]);
+    // Agents still holding the note of an earlier switch get this one instead: that profile is no longer in use.
+    const told = new Set([...entries.map(([key]) => key), ...this._switchNotes.keys(), MAIN]);
     told.delete(caller);
     this._switchNotes.delete(caller);
     for (const key of told)
