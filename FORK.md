@@ -31,6 +31,7 @@ shown (`revealed=true`) and the window focus coming from another app.
 | 3 | agent-created tabs are **closed** when the client leaves (a dead worker's too); user tabs only go free | extension: `agentTabs.ts` (new), `ownedTab.ts` (`agent`), `tabRegistry.ts` (`claim(…, {agent})`, `closeAgentTabs`, `onDetach` demotion, popup origin), `tabPicker.ts` (blank tab = agent's), `clientSession.ts` (`chrome.tabs.create` claims with `agent: true`), `connectionBroker.ts` (`_closeSession`), `background.ts` (dead-worker cleanup, 3 s cap), `types.ts` + `ui/connect.tsx` (`closeAgentTabs`, `agentTabs=keep`); server: `mcp/cdpRelay.ts` (`agentTabs=keep` in the connect URL); `tests/extension/tab-ownership.spec.ts`, `tests/extension/harness.ts` | **redesigned** on the ownership model of #44047; switch `PLAYWRIGHT_MCP_AGENT_TABS=keep` gives upstream's behavior back | upstream keeps every tab in a resumable gray group, by design (#41864, #44047) |
 | 8 | a client can delete **some** cookies (by name or domain), not plant one or clear them all | extension: `cdpPolicy.ts` (`onlyExpiredCookies`, `cookieSitesOutside`, `Network.setCookie(s)`/`deleteCookies` refused), `clientSession.ts` (`_checkCookieSites`); `tests/extension/cookies.spec.ts` | **new** (15/11) | upstream refuses `Storage.setCookies` entirely (#44047), which also blocks `browser_cookie_delete` |
 | 4 | the fork's own visual for the extension UI | (was `extension/src/ui/connect.css` & co.) | **postponed** (decision D6 of the sync roadmap): upstream's new UI already follows the system dark theme (`ui/colors.css`, `ui/common.css`); only the fork's own look is missing, a CSS-only patch if ever wanted | declined (#41841) |
+| 9 | `browser_use_profile({ profile })`: the conversation picks a vault variant (token + Chrome profile folder) at run time; every agent's backend closes and reopens in it | `backend/useProfile.ts` (schema, vault reading, description), `mcp/agentRouter.ts` (the switch itself), `backend/extensionSession.ts` (`relayScope.profile`), `mcp/extensionContextFactory.ts` + `mcp/cdpRelay.ts` (token and folder of the chosen variant, carrier only of the same profile, spawn `error` handled), `mcp/program.ts` (start folder to the router), `tests/mcp/use-profile.spec.ts`, `tests/extension/use-profile.spec.ts` | **new** (15/11, branch `feat-use-profile`) | ours |
 | — | extension tests run on Windows: the relay starts a `.js` browser executable with `node`; `PWTEST_CHROME_STUB_FOREGROUND` plays Chrome < 158 | `mcp/cdpRelay.ts` (2 lines at the `spawn`), `tests/extension/chrome-stub.js` | new (12/11) | not sent upstream |
 
 Manifest `0.5.0.3` = upstream's `0.5.0` + the three extension patches (7, 3, 8); extra permission `webNavigation`
@@ -72,8 +73,48 @@ them every backend of the agent router gets the same title and color (`browserFa
 and ignores the `clientName` the router sets per agent), so sub-agents' groups look alike. The wrapper passes neither;
 `browser_set_group_label` stays the way to name a group.
 
-Profile pinning is **not** a fork feature: use upstream's `--profile-dir-name` / `PLAYWRIGHT_MCP_PROFILE_DIR_NAME`
-(takes the profile **folder**, e.g. `Profile 13`).
+Pinning the profile at start is upstream's `--profile-dir-name` / `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` (takes the profile
+**folder**, e.g. `Profile 13`); switching it during a conversation is the fork's patch 9 (§ Profile per conversation).
+
+## Profile per conversation (patch 9, `browser_use_profile`)
+
+Every conversation starts in `C:\Dev`, so the folder table (§ Running the server) cannot pick the profile. The
+conversation calls `browser_use_profile({ profile: "jacira" })` instead; contract and decisions:
+`roadmap/2026-11-15-perfil-por-conversa.md`, review report in its `.d/relatorio.md`.
+
+- **Scope: the server, i.e. one conversation** (D2). The agent router handles the tool itself, before any backend
+  exists, so a switch before the first browser call never opens the old profile. The chosen variant reaches every
+  agent's relay through `relayScope.profile` and wins over `PLAYWRIGHT_MCP_EXTENSION_TOKEN`,
+  `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` and `--profile-dir-name`. A carrier only serves relays of the same folder and token.
+- **The switch** drops every agent's backend in the same tick (their agent tabs close, patch 3) and waits up to 10 s for
+  them to close; the answer says "closed" or "still closing". Asking for the variant already in use (the start one:
+  its token is the active token and its folder the one the relay starts with) changes nothing.
+- **Concurrency rules** (from the 15/11 review): a call that was waiting for a backend the switch dropped is **not
+  run** (error: call again); a call that ran while the switch closed its browser gets a note that it may not have taken
+  effect; every other agent the switch dropped (and main, when a sub-agent switched) gets a one-time `### Note` in its
+  next result; of two switches at once the earlier answers an error naming the profile in use; an agent that had
+  labeled its group is asked to call `browser_set_group_label` again (the label lives in the old relay).
+- **Description** (what the model reads in `tools/list`, read once at start): the pickable variants with the user's
+  aliases (`~/.claude/playwright-apelidos.json`, e.g. `{ "jacira": ["minha mãe"] }`, path `PLAYWRIGHT_MCP_PROFILE_ALIASES`;
+  local, never versioned) and the folder; Chrome's profile name only for a variant without an alias and never when it
+  contains `@` (Chrome names a profile after its e-mail).
+- **Errors, no change** (D4): unknown variant, variant without token or folder, variant left out of the allow list.
+  Without `--extension` (D5) the tool answers that it does not apply.
+- **Token** (D6): never in a response, the description or a `pw:mcp:*` log line; the router logs
+  `use profile variant=X profileDir=Y closing=N`. A browser executable that cannot start fails the call with its error
+  code and path (unhandled, Node used to print the connect URL with the token and kill the server).
+- ⚠️ **Security limitation: any agent of the conversation can switch to any vault account**, so an instruction
+  injected in a page can ask for one. `PLAYWRIGHT_MCP_USE_PROFILE_ALLOW=padrao,jacira` (server env, comma-separated)
+  limits the variants the tool lists and accepts; the start variant always stays. Unset = every usable variant.
+- **Limitations:** with `--extension` and the router off (`PLAYWRIGHT_MCP_AGENT_ROUTING=off`, `--shared-browser-context`)
+  the tool answers an error instead of switching. Profile 6 and Default run the Web Store extension (`0.5.0`, § The
+  extension), without the label command nor the agent-tab close. The HTTP mode has one router per client, so a switch
+  does not leak between clients (read from the code, untested). The token of any vault variant goes on the Chrome
+  command line when the relay has to start the browser (same as the active token upstream).
+- **Tests:** `tests/mcp/use-profile.spec.ts` (fake backends for the router rules; a real server against a stub
+  browser for the token and folder on the connect page, `--profile-dir-name`, the missing executable and the logs) and
+  `tests/extension/use-profile.spec.ts` (real extension, headless: both agents' tabs close and the next call reconnects
+  with the other folder). Separation of real profiles is only provable in the Gabriel's Chrome.
 
 ## Agent routing (patch 6)
 
@@ -337,7 +378,8 @@ Likely conflicts (the files upstream keeps rewriting, where the fork's lines liv
   (`closeAgentTabs`, `token`); `ui/connect.tsx` (`closeAgentTabs`, `token` to `connect`); `manifest.json` (version
   `0.5.0.x`, `webNavigation`);
 - `packages/playwright-core/src/tools/mcp/cdpRelay.ts` (who is background in the constructor, carrier sets and
-  functions, `agentTabs=keep`, the `.js`-with-`node` spawn, `setGroupLabel`, `sendToExtension`, `connectedRelays` in
+  functions and their same-profile filter, `agentTabs=keep`, the `.js`-with-`node` spawn and its `error` wait, the
+  `token` constructor argument, `setGroupLabel`, `sendToExtension`, `connectedRelays` in
   `onInitialized`/`onClose`/`stop`);
 - `packages/playwright-core/src/tools/mcp/browserModel.ts` (`revealQueue`, `withDeadline`, `sendToExtension`,
   `_captureRevealed` in `handleCDPCommand`, focus emulation in `_attachTab`);
@@ -352,7 +394,7 @@ Likely conflicts (the files upstream keeps rewriting, where the fork's lines liv
   triggers at the next sync.
 
 Then check: `npm run build`; `npm run ctest-mcp -- group-label capabilities tabs core agent-routing agent-silent
-screenshot cookies` (121 passed on 13/11); `env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN -u PLAYWRIGHT_MCP_EXTENSION npm run
+screenshot cookies use-profile` (121 passed on 13/11, before `use-profile`); `env -u PLAYWRIGHT_MCP_EXTENSION_TOKEN -u PLAYWRIGHT_MCP_EXTENSION npm run
 test-extension` (headless, runs on Windows since the 15/11 sync: 94 passed, 6 failed on 13/11, all six environment
 failures listed in § Testing gotchas); `node scripts/run-mcp-server.test.cjs`; `node scripts/run-mcp-server.smoke.cjs`.
 `npm run flint` covers `packages/extension/` since upstream #43072 (`npm run tsc` runs its two tsconfigs).
