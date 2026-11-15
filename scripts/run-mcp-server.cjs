@@ -202,6 +202,69 @@ function envForAiSession(env, origem, sessionTemp) {
   return out;
 }
 
+function isExtensionMode(env, argv) {
+  return argv.includes('--extension') || env.PLAYWRIGHT_MCP_EXTENSION === 'true' || env.PLAYWRIGHT_MCP_EXTENSION === '1';
+}
+
+// Folder -> vault variant, so a conversation opened in a given folder talks to the matching Chrome profile
+// without touching the global active token. Claude Code starts the MCP server with the conversation's folder
+// as its cwd (measured 15/11/2026 with a probe server under `claude -p`). Local, never versioned:
+// ~/.claude/playwright-perfis.json = { "C:/Dev/univali-docs": "jacira" }. Keys starting with "_" are comments.
+// Match: path prefix on folder boundaries, case-insensitive, `\` and `/` treated alike; the longest key wins.
+// A per-folder server in ~/.claude.json (`-s local`) is not used for this: the desktop app looks the project
+// up with backslashes and never loads it.
+function profileTablePath(env) {
+  return env.PLAYWRIGHT_MCP_PROFILE_TABLE || path.join(os.homedir(), '.claude', 'playwright-perfis.json');
+}
+
+function normalizeFolder(folder) {
+  return String(folder).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function variantForFolder(table, cwd) {
+  const here = normalizeFolder(cwd);
+  let best = null;
+  for (const [folder, variant] of Object.entries(table || {})) {
+    if (folder.startsWith('_') || typeof variant !== 'string' || !variant)
+      continue;
+    const key = normalizeFolder(folder);
+    if (!key || (here !== key && !here.startsWith(key + '/')))
+      continue;
+    if (!best || key.length > best.key.length)
+      best = { key, folder, variant };
+  }
+  return best;
+}
+
+// Runs before envForActiveProfile: swaps the active token for the folder's variant, and the profile follows.
+// No table, no match or not extension mode -> env unchanged. A variant without a vault token -> warning, default kept.
+function envForFolder(env, argv, { cwd, tablePath = profileTablePath(env), log: logFn = log } = {}) {
+  if (!isExtensionMode(env, argv))
+    return env;
+  let table;
+  try {
+    table = JSON.parse(fs.readFileSync(tablePath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT')
+      logFn(`profile table ${tablePath} unreadable (${error.message}): keeping the default token`);
+    return env;
+  }
+  const match = variantForFolder(table, cwd);
+  if (!match)
+    return env;
+  const token = env['PLAYWRIGHT_MCP_EXTENSION_TOKEN__' + match.variant];
+  if (!token) {
+    logFn(`variant "${match.variant}" chosen by folder ${match.folder} has no PLAYWRIGHT_MCP_EXTENSION_TOKEN__${match.variant}: keeping the default token`);
+    return env;
+  }
+  if (env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME) {
+    logFn(`variant "${match.variant}" chosen by folder ${match.folder} ignored: PLAYWRIGHT_MCP_PROFILE_DIR_NAME is set explicitly`);
+    return env;
+  }
+  logFn(`variant "${match.variant}" chosen by folder ${match.folder}`);
+  return { ...env, PLAYWRIGHT_MCP_EXTENSION_TOKEN: token };
+}
+
 // Every extension token in the vault (`PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>` in ~/.claude.json)
 // has a Chrome profile folder registered beside it (`PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>`,
 // e.g. `Profile 13`). The extension token lives in ONE profile; if the connect page opens in another
@@ -210,7 +273,7 @@ function envForAiSession(env, origem, sessionTemp) {
 // An explicit PLAYWRIGHT_MCP_PROFILE_DIR_NAME always wins; the legacy PLAYWRIGHT_MCP_PROFILE_DIRECTORY
 // (this fork's pre-v2 name) is honoured as a fallback. No token match -> warn, never guess.
 function envForActiveProfile(env, argv) {
-  if (!argv.includes('--extension') && env.PLAYWRIGHT_MCP_EXTENSION !== 'true' && env.PLAYWRIGHT_MCP_EXTENSION !== '1')
+  if (!isExtensionMode(env, argv))
     return env;
   if (env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME)
     return env;
@@ -528,7 +591,8 @@ function main() {
   const argv = argvForAiSession(rawArgv, process.env.CENTRAL_ORIGEM);
   const aiSession = argv !== rawArgv;
   const sessionTemp = aiSession ? prepareSessionTemp(sessionTempRoot(), process.pid, { env: process.env }) : null;
-  const env = envForActiveProfile(envForAiSession(process.env, process.env.CENTRAL_ORIGEM, sessionTemp), argv);
+  const sessionEnv = envForAiSession(process.env, process.env.CENTRAL_ORIGEM, sessionTemp);
+  const env = envForActiveProfile(envForFolder(sessionEnv, argv, { cwd: process.cwd() }), argv);
   if (aiSession)
     log(`CENTRAL_ORIGEM=${process.env.CENTRAL_ORIGEM}: AI-opened session, swapping extension mode for isolated headless chromium`);
   const onExit = sessionTemp ? () => removeSessionTemp(sessionTemp) : undefined;
@@ -558,6 +622,8 @@ module.exports = {
   argvForAiSession,
   envForAiSession,
   envForActiveProfile,
+  envForFolder,
+  variantForFolder,
   retentionDays,
   outputDirsToPrune,
   pruneOutputDir,

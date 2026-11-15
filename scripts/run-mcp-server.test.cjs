@@ -443,6 +443,61 @@ test('exit hook (n): runAndExit calls onExit before exiting (child exit and spaw
   assert.deepStrictEqual(run(path.join(dir, 'does-not-exist.exe'), [], ''), { status: 1, marked: true }, 'spawn error: exit 1, hook ran');
 });
 
+function profileTable(content) {
+  const file = path.join(tempDir(), 'playwright-perfis.json');
+  fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  return file;
+}
+
+const VAULT = {
+  PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'tok-padrao',
+  PLAYWRIGHT_MCP_EXTENSION_TOKEN__padrao: 'tok-padrao',
+  PLAYWRIGHT_MCP_EXTENSION_TOKEN__jacira: 'tok-jacira',
+  PLAYWRIGHT_MCP_PROFILE_DIR_NAME__padrao: 'Profile 13',
+  PLAYWRIGHT_MCP_PROFILE_DIR_NAME__jacira: 'Profile 6',
+};
+const EXT = ['--extension', '--browser', 'chrome'];
+
+test('folder (p): prefix match, case and slashes ignored on both sides, longest key wins; the profile follows', () => {
+  const tablePath = profileTable({ '_comment': 'x', 'C:/Dev/univali-docs': 'jacira', 'c:\\dev\\univali-docs\\pub': 'padrao' });
+  const log = collectingLog();
+  const env = wrapper.envForFolder(VAULT, EXT, { cwd: 'C:\\Dev\\Univali-Docs\\sub', tablePath, log });
+  assert.strictEqual(env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, 'tok-jacira');
+  assert.deepStrictEqual(log.lines, ['variant "jacira" chosen by folder C:/Dev/univali-docs']);
+  assert.ok(!log.lines.join('').includes('tok-'), 'the token never reaches the log');
+  const profiled = wrapper.envForActiveProfile(env, EXT);
+  assert.strictEqual(profiled.PLAYWRIGHT_MCP_PROFILE_DIR_NAME, 'Profile 6');
+  const longest = wrapper.envForFolder(VAULT, EXT, { cwd: 'C:/Dev/univali-docs/pub/', tablePath, log: collectingLog() });
+  assert.strictEqual(longest.PLAYWRIGHT_MCP_EXTENSION_TOKEN, 'tok-padrao', 'the longer key wins');
+});
+
+test('folder (q): no match, a sibling with the same prefix, no table, or not extension mode -> env unchanged', () => {
+  const tablePath = profileTable({ 'C:/Dev/univali-docs': 'jacira' });
+  for (const cwd of ['C:\\Dev', 'C:\\Dev\\univali-docs-old', 'D:\\Dev\\univali-docs']) {
+    const log = collectingLog();
+    assert.strictEqual(wrapper.envForFolder(VAULT, EXT, { cwd, tablePath, log }), VAULT, cwd);
+    assert.deepStrictEqual(log.lines, []);
+  }
+  const missing = collectingLog();
+  assert.strictEqual(wrapper.envForFolder(VAULT, EXT, { cwd: 'C:/Dev/univali-docs', tablePath: path.join(tempDir(), 'none.json'), log: missing }), VAULT);
+  assert.deepStrictEqual(missing.lines, [], 'a missing table is silent');
+  assert.strictEqual(wrapper.envForFolder(VAULT, ['--browser', 'chromium', '--headless'], { cwd: 'C:/Dev/univali-docs', tablePath, log: collectingLog() }), VAULT, 'AI sessions are not extension mode');
+});
+
+test('folder (r): a variant without a vault token, a broken table or an explicit profile keep the default and log', () => {
+  const noToken = collectingLog();
+  const env = wrapper.envForFolder(VAULT, EXT, { cwd: 'C:/Dev/x', tablePath: profileTable({ 'C:/Dev/x': 'andressa' }), log: noToken });
+  assert.strictEqual(env, VAULT);
+  assert.match(noToken.lines.join('\n'), /variant "andressa" chosen by folder C:\/Dev\/x has no PLAYWRIGHT_MCP_EXTENSION_TOKEN__andressa: keeping the default token/);
+  const broken = collectingLog();
+  assert.strictEqual(wrapper.envForFolder(VAULT, EXT, { cwd: 'C:/Dev/x', tablePath: profileTable('{ not json'), log: broken }), VAULT);
+  assert.match(broken.lines.join('\n'), /unreadable/);
+  const explicit = { ...VAULT, PLAYWRIGHT_MCP_PROFILE_DIR_NAME: 'Profile 13' };
+  const pinned = collectingLog();
+  assert.strictEqual(wrapper.envForFolder(explicit, EXT, { cwd: 'C:/Dev/x', tablePath: profileTable({ 'C:/Dev/x': 'jacira' }), log: pinned }), explicit);
+  assert.match(pinned.lines.join('\n'), /ignored: PLAYWRIGHT_MCP_PROFILE_DIR_NAME is set explicitly/);
+});
+
 (async () => {
   let failed = 0;
   for (const { name, fn } of tests) {

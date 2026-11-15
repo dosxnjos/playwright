@@ -385,6 +385,14 @@ fork (see § Known limitations).
 is a fallback, and no match logs a warning instead of guessing. Without a profile Chrome opens the connect page in the
 last-focused profile and offers the token to the wrong one. New token = add its `__<variant>` profile line too.
 
+**The folder can pick the variant.** Before that, `envForFolder` reads `~/.claude/playwright-perfis.json` (local, never
+versioned; `PLAYWRIGHT_MCP_PROFILE_TABLE` overrides the path), e.g. `{ "C:/Dev/univali-docs": "jacira" }`: when the server's
+cwd (Claude Code starts it in the conversation's folder) is that folder or below it (case and `\`/`/` ignored, the longest key
+wins), the active token becomes `__<variant>` and the profile follows. No table or no match = nothing changes; a variant with
+no token logs a warning and keeps the default. Not `-s local` servers: the desktop app looks them up with backslashes and never
+loads them. To save a new or rotated extension token, run `scripts/gravar-token-perfil.ps1 -Variante <name> [-Perfil "Profile N"]`
+(`powershell -ExecutionPolicy Bypass -File ...`): it writes Doppler (`harness/prd`) and `~/.claude.json` and never prints it.
+
 **AI-opened sessions never use the extension.** Sessions with `CENTRAL_ORIGEM="ia:<route>"` get
 `--browser chromium --isolated --headless` (`argvForAiSession`), and `PLAYWRIGHT_MCP_EXTENSION` is dropped from their
 env (`envForAiSession`): overnight there is no human to accept the connection and the first tool call used to hang for
