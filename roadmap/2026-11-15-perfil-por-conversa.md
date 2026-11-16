@@ -72,6 +72,10 @@ de `feat-use-profile`. Resultado completo do workflow `wf_410bb6f7-b28` no journ
   limitations, com o contorno de vigiar a pasta Downloads.
 - `FORK.md`: patch 3 (diálogo), o ponto novo de conflito em `backend/context.ts`, e a divergência sobre "aba na
   frente" (linha ~498).
+- **Estado (15/11, noite):** integração pronta na branch `integra-2026-11-15` (worktree `C:\Dev\pw-integra-1115`):
+  `main`, os dois consertos com as três ressalvas, extensão `0.5.0.4` no `dist/`, docs; último commit de código
+  `4fbab960c`, revisado por subagente sem contexto e testado (MCP do fork 131/132, a falha é a instável `agent-routing:214`, que passou 3/3 sozinha;
+  extensão 100/106 com as 6 de ambiente; wrapper 30/30; flint ok). A virada continua sendo a Fase 4 do relatório.
 
 ## Pronto quando
 
