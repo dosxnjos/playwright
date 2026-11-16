@@ -117,6 +117,52 @@ test('tab detached by a PDF frame comes back current, at its place', async ({ us
   expect(await client.snapshot()).toContain('Page Origin');
 });
 
+// Fork: the agent picked a tab while the detached one was away; when it comes back it must not take the pick over.
+test('tab detached by a PDF frame does not come back current after the agent selected or opened a tab', async ({ user, connectWithToken, server }) => {
+  const client = await connectWithToken('worker');
+  await client.navigate('Alpha');
+  await client.openTab('Origin');
+  await client.openTab('Beta');
+  await client.selectTab('Origin');
+  const detaches = await recordDebuggerDetach(user);
+  // Holds the extension's announce of the detached tab (it reads the tab first) until the agent made its pick.
+  const hold = (title: string) => user.chrome(async (chrome, tabOf, title: string) => {
+    const tabId = (await tabOf(title)).id;
+    const get = (globalThis as any).__get ??= chrome.tabs.get;
+    (globalThis as any).__held = true;
+    chrome.tabs.get = async (id: number) => {
+      while (id === tabId && (globalThis as any).__held)
+        await new Promise(resolve => setTimeout(resolve, 20));
+      return await get.call(chrome.tabs, id);
+    };
+  }, title);
+  const release = () => user.chrome(async () => (globalThis as any).__held = false);
+  const addPdfFrame = (title: string) => user.pageOf(title).evaluate(src => {
+    const iframe = document.createElement('iframe');
+    iframe.src = src;
+    document.body.appendChild(iframe);
+  }, server.PREFIX + '/empty.pdf');
+
+  await hold('Origin');
+  await addPdfFrame('Origin');
+  await expect.poll(async () => (await detaches()).length).toBe(1);
+  await expect.poll(client.tabs).toEqual(['Alpha', 'Beta']);
+  await client.selectTab('Alpha');
+  await release();
+  await expect.poll(client.tabs).toEqual(['Alpha', 'Beta', 'Origin']);
+  expect(await client.currentTab()).toBe('Alpha');
+
+  await client.selectTab('Beta');
+  await hold('Beta');
+  await addPdfFrame('Beta');
+  await expect.poll(async () => (await detaches()).length).toBe(2);
+  await expect.poll(client.tabs).toEqual(['Alpha', 'Origin']);
+  await client.openTab('Gamma');
+  await release();
+  await expect.poll(client.tabs).toEqual(['Alpha', 'Origin', 'Gamma', 'Beta']);
+  expect(await client.currentTab()).toBe('Gamma');
+});
+
 testWithFrameInjector('client reports an error when the frame of another extension detaches the debugger', {
   annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/43230' },
 }, async ({ user, connectWithToken }) => {

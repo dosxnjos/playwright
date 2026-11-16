@@ -211,6 +211,8 @@ export class Context {
   }
 
   async newTab(isolatedContext?: string): Promise<Tab> {
+    // Fork: the agent picked its tab; a detached tab that comes back later does not take it over (_onPageCreated).
+    this._lostCurrentTab = undefined;
     const browserContext = await this.ensureBrowserContext(isolatedContext);
     const page = await browserContext.newPage();
     this._setCurrentTab(this._tabs.find(t => t.page === page)!);
@@ -221,6 +223,8 @@ export class Context {
     const tab = this._tabs[index];
     if (!tab)
       throw new Error(`Tab ${index} not found`);
+    // Fork: as in newTab.
+    this._lostCurrentTab = undefined;
     await tab.page.bringToFront();
     await tab.updateWebMCPTools();
     this._setCurrentTab(tab);
