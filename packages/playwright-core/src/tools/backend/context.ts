@@ -211,8 +211,16 @@ export class Context {
   }
 
   async newTab(isolatedContext?: string): Promise<Tab> {
+    const tab = await this._openTab(isolatedContext);
     // Fork: the agent picked its tab; a detached tab that comes back later does not take it over (_onPageCreated).
+    // After the await, so that a current tab detached meanwhile is forgotten too.
     this._lostCurrentTab = undefined;
+    return tab;
+  }
+
+  // Fork: ensureTab opens a tab through here, not through newTab: its blank tab must not cancel the return of the tab
+  // that Chrome detached (_onPageCreated).
+  private async _openTab(isolatedContext?: string): Promise<Tab> {
     const browserContext = await this.ensureBrowserContext(isolatedContext);
     const page = await browserContext.newPage();
     this._setCurrentTab(this._tabs.find(t => t.page === page)!);
@@ -223,10 +231,10 @@ export class Context {
     const tab = this._tabs[index];
     if (!tab)
       throw new Error(`Tab ${index} not found`);
-    // Fork: as in newTab.
-    this._lostCurrentTab = undefined;
     await tab.page.bringToFront();
     await tab.updateWebMCPTools();
+    // Fork: as in newTab.
+    this._lostCurrentTab = undefined;
     this._setCurrentTab(tab);
     return tab;
   }
@@ -239,7 +247,7 @@ export class Context {
       this._setCurrentTab(undefined);
     }
     if (!this._currentTab)
-      await this.newTab();
+      await this._openTab();
     if (crashed)
       this._currentTab!.logErrorMessage('Page crashed and was reset to about:blank.');
     await this._currentTab!.waitForInitialized();
@@ -252,7 +260,8 @@ export class Context {
       throw new Error(`Tab ${index} not found`);
     const url = tab.page.url();
     await tab.page.close();
-    // Fork: a tab closed on request does not come back.
+    // Fork: the agent changed its tabs (the closed one is never the detached one, which is out of the list): a detached
+    // tab that comes back later does not take the current place over.
     this._lostCurrentTab = undefined;
     return url;
   }

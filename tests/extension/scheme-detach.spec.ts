@@ -117,16 +117,9 @@ test('tab detached by a PDF frame comes back current, at its place', async ({ us
   expect(await client.snapshot()).toContain('Page Origin');
 });
 
-// Fork: the agent picked a tab while the detached one was away; when it comes back it must not take the pick over.
-test('tab detached by a PDF frame does not come back current after the agent selected or opened a tab', async ({ user, connectWithToken, server }) => {
-  const client = await connectWithToken('worker');
-  await client.navigate('Alpha');
-  await client.openTab('Origin');
-  await client.openTab('Beta');
-  await client.selectTab('Origin');
-  const detaches = await recordDebuggerDetach(user);
-  // Holds the extension's announce of the detached tab (it reads the tab first) until the agent made its pick.
-  const hold = (title: string) => user.chrome(async (chrome, tabOf, title: string) => {
+// Holds the extension's announce of a detached tab (it reads the tab first) until releaseAnnounce().
+async function holdAnnounce(user: User, title: string): Promise<void> {
+  await user.chrome(async (chrome, tabOf, title: string) => {
     const tabId = (await tabOf(title)).id;
     const get = (globalThis as any).__get ??= chrome.tabs.get;
     (globalThis as any).__held = true;
@@ -136,31 +129,66 @@ test('tab detached by a PDF frame does not come back current after the agent sel
       return await get.call(chrome.tabs, id);
     };
   }, title);
-  const release = () => user.chrome(async () => (globalThis as any).__held = false);
-  const addPdfFrame = (title: string) => user.pageOf(title).evaluate(src => {
+}
+
+async function releaseAnnounce(user: User): Promise<void> {
+  await user.chrome(async () => (globalThis as any).__held = false);
+}
+
+async function addPdfFrame(user: User, title: string, src: string): Promise<void> {
+  await user.pageOf(title).evaluate(src => {
     const iframe = document.createElement('iframe');
     iframe.src = src;
     document.body.appendChild(iframe);
-  }, server.PREFIX + '/empty.pdf');
+  }, src);
+}
 
-  await hold('Origin');
-  await addPdfFrame('Origin');
+// Fork: the agent picked a tab while the detached one was away; when it comes back it must not take the pick over.
+// A blank tab that a call opened because no tab was left is not a pick.
+test('tab detached by a PDF frame does not come back current after the agent selected or opened a tab', async ({ user, connectWithToken, server }) => {
+  const pdf = server.PREFIX + '/empty.pdf';
+  // The context waits 3 s for a detached tab: a pick made later proves nothing.
+  const pickInTime = (lostAt: number) => expect(Date.now() - lostAt, 'pick made within the 3 s wait').toBeLessThan(2500);
+  const client = await connectWithToken('worker');
+  await client.navigate('Alpha');
+  await client.openTab('Origin');
+  await client.openTab('Beta');
+  await client.selectTab('Origin');
+  const detaches = await recordDebuggerDetach(user);
+
+  await holdAnnounce(user, 'Origin');
+  await addPdfFrame(user, 'Origin', pdf);
   await expect.poll(async () => (await detaches()).length).toBe(1);
+  let lostAt = Date.now();
   await expect.poll(client.tabs).toEqual(['Alpha', 'Beta']);
   await client.selectTab('Alpha');
-  await release();
+  pickInTime(lostAt);
+  await releaseAnnounce(user);
   await expect.poll(client.tabs).toEqual(['Alpha', 'Beta', 'Origin']);
   expect(await client.currentTab()).toBe('Alpha');
 
   await client.selectTab('Beta');
-  await hold('Beta');
-  await addPdfFrame('Beta');
+  await holdAnnounce(user, 'Beta');
+  await addPdfFrame(user, 'Beta', pdf);
   await expect.poll(async () => (await detaches()).length).toBe(2);
+  lostAt = Date.now();
   await expect.poll(client.tabs).toEqual(['Alpha', 'Origin']);
   await client.openTab('Gamma');
-  await release();
+  pickInTime(lostAt);
+  await releaseAnnounce(user);
   await expect.poll(client.tabs).toEqual(['Alpha', 'Origin', 'Gamma', 'Beta']);
   expect(await client.currentTab()).toBe('Gamma');
+
+  // The only tab of a client detaches: the next call opens a blank tab, and the detached tab still comes back current.
+  const lone = await connectWithToken('lone');
+  await lone.navigate('Lone');
+  await holdAnnounce(user, 'Lone');
+  await addPdfFrame(user, 'Lone', pdf);
+  await expect.poll(async () => (await detaches()).length).toBe(3);
+  await expect.poll(lone.tabs).toEqual(['']);
+  await releaseAnnounce(user);
+  await expect.poll(lone.tabs).toEqual(['Lone', '']);
+  expect(await lone.currentTab()).toBe('Lone');
 });
 
 testWithFrameInjector('client reports an error when the frame of another extension detaches the debugger', {
