@@ -15,7 +15,8 @@ The rule of the fork: carry only what upstream does not do. History of how it go
   before the switch); the work branch `sync-2026-11` stays on `origin`.
 
 **Last sync:** 15/11/2026, `main` = `908d32b77` on top of upstream `8534271f0` (upstream `main` of 12/11, after
-#44047). Extension `0.5.0.3`. Checked in real Chrome (Profile 13) on 15/11: label, navigate, snapshot, screenshot of a
+#44047). Extension `0.5.0.3` (the 15/11 integration, branch `integra-2026-11-15`, brings `0.5.0.4`: not yet checked in
+real Chrome). Checked in real Chrome (Profile 13) on 15/11: label, navigate, snapshot, screenshot of a
 hidden tab (178 ms and 2.4 s), no stolen focus; the close left only the agent tab the user was looking at, in the
 gray group (§ Tab ownership, "Tab in front of the user"). One client, no sub-agent. Not measured there: a tab never
 shown (`revealed=true`) and the window focus coming from another app.
@@ -63,8 +64,9 @@ has: `OwnedTab.agent` is true when the client created the tab, false when the us
   ⚠️ **One exception, on the normal close only** (since `0.5.0.4`): an agent tab with a "Leave site?" dialog open (a
   navigation of the agent waiting on it) closes even in front, because Chrome brings a tab with a dialog to the front
   and nobody types into a page behind one. The dead-worker cleanup has no debugger, so there the rule has no exception.
-  Cost (15/11 review, accepted): the extension cannot tell who started the navigation, so a "Leave site?" the **user**
-  raised on an agent tab in front (a reload over unsaved form data) at the moment the client leaves also closes it.
+  Cost (found by the 15/11 review, read from the code, not run; kept as is by the integration, open for decision): the
+  extension cannot tell who started the navigation, so a "Leave site?" the **user** raised on an agent tab in front (a
+  reload over unsaved form data) at the moment the client leaves also closes it.
 - **"Leave site?" on close** (since `0.5.0.4`, branch `fix-beforeunload` plus the 15/11 review): `chrome.tabs.remove`
   runs the page's `beforeunload`, and a page that saw a click and has a handler kept its tab open with the dialog up,
   hanging `browser_tabs close`, `browser_close` and the close on leave (so the user's tabs never went to the gray
