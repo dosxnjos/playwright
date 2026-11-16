@@ -120,6 +120,12 @@ test('agent tab whose page asks "Leave site?" closes without the dialog: on brow
   // A navigation of the agent waits on the dialog: the dialog is dismissed (the page stays) and the tab closes.
   await client.selectTab('AsksWhileOpen');
   expect(await client.runCode(`async page => { await page.goto('${user.urlOf('Beta')}'); }`)).toContain('"beforeunload" dialog');
+  // In front of the user, as Chrome puts a tab with a dialog: it closes anyway (the "Leave site?" exception).
+  await user.chrome(async (chrome, tabOf) => {
+    const tab = await tabOf('AsksWhileOpen');
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  });
 
   await client.close();
   await expect.poll(user.groups).toEqual([]);
@@ -142,9 +148,11 @@ test('an alert, confirm or prompt is never dismissed: an agent tab behind closes
   // The user works in another window: the agent tab with the confirm is not in front of anyone, and closes.
   const first = await connectWithToken('first', close);
   await openConfirm(first, 'ConfirmsA');
+  const confirmsA = await user.tabId('ConfirmsA');
   await user.chrome(async (chrome, tabOf, url: string) => chrome.windows.create({ url, focused: true }), user.urlOf('Elsewhere'));
   await first.close();
-  await expect.poll(() => user.tabs(), { timeout: 15000 }).not.toContain('ConfirmsA');
+  // By id: an answered confirm renames the page.
+  await expect.poll(() => user.chrome(async (chrome, tabOf, tabId: number) => chrome.tabs.get(tabId).then(() => true, () => false), confirmsA), { timeout: 15000 }).toBe(false);
 
   // The user looks at the agent tab with the confirm: the tab goes free, the confirm stays unanswered.
   const second = await connectWithToken('second', close);
@@ -173,8 +181,8 @@ test('a dialog that the debugger cannot dismiss holds the leave of the client 5 
   });
 
   await client.close();
-  // The leave goes on past the cap: the tab that the user picked goes free.
-  await expect.poll(async () => (await user.groups()).find(group => group.tabs.includes('Alpha'))?.color, { timeout: 15000 }).toBe('grey');
+  // The leave goes on past the 5 s cap: the tab that the user picked goes free.
+  await expect.poll(async () => (await user.groups()).find(group => group.tabs.includes('Alpha'))?.color, { timeout: 10000 }).toBe('grey');
 });
 
 test('PLAYWRIGHT_MCP_AGENT_TABS=keep keeps the tabs of the client in a gray group, as upstream', async ({ user, connectWithToken }) => {

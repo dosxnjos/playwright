@@ -52,8 +52,9 @@ function persist(): void {
 }
 
 // The longest wait for one agent tab to close (fork, 15/11/2026): a dialog nobody answers must not hold the rest of the
-// client's leave (releaseAll, the gray group of the user's tabs) or a browser_tabs close forever. It covers every step
-// of the close, the dismiss of an open dialog included; the tabs close side by side, so a leave waits 5 s at most.
+// client's leave (releaseAll, the gray group of the user's tabs) forever. It covers every step of the close, the
+// dismiss of an open dialog included; the tabs close side by side, so a leave waits 5 s at most for them. A
+// browser_tabs close answers after the cap too, but its server side still waits for the tab to go.
 export const AGENT_TAB_CLOSE_CAP_MS = 5000;
 
 // The type of the JavaScript dialog open on each tab ('alert', 'confirm', 'prompt', 'beforeunload'), as the debugger
@@ -97,7 +98,11 @@ export async function closeTabs(tabIds: number[]): Promise<void> {
 async function closeTabWithoutBeforeUnload(tabId: number): Promise<void> {
   const target = { tabId };
   const acceptBeforeUnload = (source: chrome.debugger.Debuggee, method: string, params?: object) => {
-    if (source.tabId === tabId && method === 'Page.javascriptDialogOpening' && (params as { type?: string } | undefined)?.type === 'beforeunload')
+    if (source.tabId !== tabId)
+      return;
+    // The registry's listeners are off once the last client left (chromeListeners.ts): this one keeps the record.
+    noteDebuggerEvent(tabId, method, params);
+    if (method === 'Page.javascriptDialogOpening' && (params as { type?: string } | undefined)?.type === 'beforeunload')
       chrome.debugger.sendCommand(target, 'Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
   };
   chrome.debugger.onEvent.addListener(acceptBeforeUnload);
