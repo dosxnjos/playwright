@@ -128,6 +128,55 @@ test('agent tab whose page asks "Leave site?" closes without the dialog: on brow
   expect(await user.tabs()).not.toContain('Beta');
 });
 
+test('an alert, confirm or prompt is never dismissed: an agent tab behind closes past it, the one in front of the user stays with it', async ({ user, connectWithToken }) => {
+  user.browserContext.on('dialog', () => {});
+  for (const title of ['ConfirmsA', 'ConfirmsB'])
+    user.definePage(title, `<script>window.ask = () => { document.title = 'Answered ' + confirm('Go on?'); };</script>`);
+  const openConfirm = async (client: Awaited<ReturnType<typeof connectWithToken>>, title: string) => {
+    await client.openTab(title);
+    await user.pageOf(title).evaluate(() => setTimeout(() => (window as any).ask(), 0));
+    // The client hears of the dialog through the debugger of the extension, so the extension heard of it first.
+    await expect.poll(() => client.snapshot()).toContain('"confirm" dialog');
+  };
+
+  // The user works in another window: the agent tab with the confirm is not in front of anyone, and closes.
+  const first = await connectWithToken('first', close);
+  await openConfirm(first, 'ConfirmsA');
+  await user.chrome(async (chrome, tabOf, url: string) => chrome.windows.create({ url, focused: true }), user.urlOf('Elsewhere'));
+  await first.close();
+  await expect.poll(() => user.tabs(), { timeout: 15000 }).not.toContain('ConfirmsA');
+
+  // The user looks at the agent tab with the confirm: the tab goes free, the confirm stays unanswered.
+  const second = await connectWithToken('second', close);
+  await openConfirm(second, 'ConfirmsB');
+  await user.chrome(async (chrome, tabOf) => {
+    const tab = await tabOf('ConfirmsB');
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  });
+  await second.close();
+  await expect.poll(user.groups, { timeout: 15000 }).toEqual([{ title: 'Playwright · second', color: 'grey', tabs: ['ConfirmsB'] }]);
+});
+
+test('a dialog that the debugger cannot dismiss holds the leave of the client 5 s at most', async ({ user, connect }) => {
+  user.browserContext.on('dialog', () => {});
+  user.definePage('Asks', `<button>Click me</button><script>window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });</script>`);
+  await user.openTab('Alpha');
+  const client = await connect('worker', { tabs: ['Alpha'] }, close);
+  await client.openTab('Asks');
+  await client.click('e2');
+  expect(await client.runCode(`async page => { await page.goto('${user.urlOf('Beta')}'); }`)).toContain('"beforeunload" dialog');
+  // A debugger that never answers Page.handleJavaScriptDialog.
+  await user.chrome(async chrome => {
+    const sendCommand = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = (target: object, method: string, params?: object) => method === 'Page.handleJavaScriptDialog' ? new Promise(() => {}) : sendCommand.call(chrome.debugger, target, method, params);
+  });
+
+  await client.close();
+  // The leave goes on past the cap: the tab that the user picked goes free.
+  await expect.poll(async () => (await user.groups()).find(group => group.tabs.includes('Alpha'))?.color, { timeout: 15000 }).toBe('grey');
+});
+
 test('PLAYWRIGHT_MCP_AGENT_TABS=keep keeps the tabs of the client in a gray group, as upstream', async ({ user, connectWithToken }) => {
   const client = await connectWithToken('agent', { env: { PLAYWRIGHT_MCP_AGENT_TABS: 'keep' } });
   await client.navigate('Alpha');

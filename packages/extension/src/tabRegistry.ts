@@ -16,7 +16,7 @@
 
 
 import { OwnedTab, detachDebuggersOfPreviousServiceWorker } from './ownedTab';
-import { closeTabs, dismissOpenDialog, forgetAgentTabs, recordAgentTab, tabsInFrontOfUser } from './agentTabs';
+import { closeTabs, forgetAgentTabs, forgetOpenDialog, hasBeforeUnloadDialog, noteDebuggerEvent, recordAgentTab, tabsInFrontOfUser } from './agentTabs';
 
 import type { ChromeListeners } from './chromeListeners';
 import type { ClientSession } from './clientSession';
@@ -45,9 +45,13 @@ export class TabRegistry {
         this._tabs.get(tabId)?.didNavigate(tab);
     });
     listeners.add(chrome.debugger.onEvent, (source, method, params) => {
+      // Fork (patch 3): the open dialog of each tab, for the close of agent tabs (agentTabs.ts). Before the lookup: a
+      // leaving client's agent tabs are out of the table when they close.
+      noteDebuggerEvent(source.tabId, method, params);
       this._tabs.get(source.tabId!)?.didReceiveDebuggerEvent(source, method, params);
     });
     listeners.add(chrome.debugger.onDetach, (source, reason) => {
+      forgetOpenDialog(source.tabId);
       const tab = this._tabs.get(source.tabId!);
       // Fork (patch 3): the user took the tab over (Cancel on the debugger bar, DevTools opened): it is theirs now, never
       // closed when the client leaves.
@@ -132,19 +136,15 @@ export class TabRegistry {
   // closed) gets no event for them; each tab is closed on its own (one that is gone does not stop the others). The tab
   // in front of the user (active tab of a focused window) is never closed: it becomes the user's and goes free.
   // Closed before the debugger goes (15/11/2026): closeTabs needs it to skip a "Leave site?" dialog (agentTabs.ts).
-  // A tab with a dialog open (a navigation of the agent waiting on "Leave site?") is closed even in front: Chrome brings
-  // a tab to the front when it opens a dialog (measured in headless Chromium, 15/11/2026), and nobody types into a page
-  // behind a dialog; the agent was leaving that page anyway.
+  // A tab with a "Leave site?" dialog open (a navigation of the agent waiting on it) is closed even in front: Chrome
+  // brings a tab to the front when it opens a dialog (measured in headless Chromium, 15/11/2026), and nobody types into
+  // a page behind a dialog; the agent was leaving that page anyway. An alert, confirm or prompt in front stays, with the
+  // tab: the user may be reading it.
   async closeAgentTabs(session: ClientSession): Promise<void> {
     const agentTabs = [...this._tabs.values()].filter(tab => tab.session === session && tab.agent);
-    const withDialog = new Set<number>();
-    await Promise.all(agentTabs.map(async tab => {
-      if (await dismissOpenDialog(tab.tabId))
-        withDialog.add(tab.tabId);
-    }));
     const inFront = await tabsInFrontOfUser(agentTabs.map(tab => tab.tabId));
     for (const tab of agentTabs)
-      tab.agent = !inFront.has(tab.tabId) || withDialog.has(tab.tabId);
+      tab.agent = !inFront.has(tab.tabId) || hasBeforeUnloadDialog(tab.tabId);
     const tabs = agentTabs.filter(tab => tab.agent);
     for (const tab of tabs)
       this._tabs.delete(tab.tabId);
@@ -196,6 +196,7 @@ export class TabRegistry {
 
   private _onTabRemoved(tabId: number, removeInfo: chrome.tabs.OnRemovedInfo): void {
     this._reservedTabIds.delete(tabId);
+    forgetOpenDialog(tabId);
     const tab = this._tabs.get(tabId);
     if (!tab)
       return;
