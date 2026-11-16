@@ -28,13 +28,15 @@ shown (`revealed=true`) and the window focus coming from another app.
 | 6 | agent routing: one browser backend per calling agent (`_meta.agente`); `browser_close` text says what it closes; AI sessions start with routing off; an ended agent's backend is released by a SubagentStop marker file | `mcp/agentRouter.ts`, `mcp/program.ts` (`withAgentRouting` around the factory passed to `mcpServer.start`), `backend/common.ts` (`browser_close` text), `tools/index.ts` (exports for the specs), `tests/mcp/agent-routing.spec.ts`, `scripts/run-mcp-server.cjs` (`envForAiSession`) | redone as it was; plus: the session folder goes on process `exit` (upstream's stdio server stopped calling `dispose` at stdin end, #43174), one `exit` listener per process | ours; upstream declined a similar path (#39703, #42961) |
 | 2 | `browser_set_group_label` tool | server: `backend/groupLabel.ts`, `backend/extensionSession.ts` (`Browser -> relay` registry), `backend/tools.ts`, `mcp/{cdpRelay,browserModel,protocol,extensionContextFactory}.ts` (`extension.setGroupLabel`); extension: `clientSession.ts` (the command) -> `connectionBroker.ts` (`onSetGroupLabel`) -> `tabGroupManager.ts` (`setLabel`, `ClientTabGroup.setTitle`); `tests/mcp/{group-label,capabilities}.spec.ts`, `tests/extension/group-label.spec.ts` | **redesigned** on `TabGroupManager`; dedup " (2)", " (3)" there; with `--no-tab-group` it answers a text, not an error | upstream only has a **fixed name per server** (`--session-name`/`--session-color`, #44047); #41840 closed "not planned" in the 31/10 sweep |
 | 7 | focus zero: who is in the background, carrier, put the user's tab back, focus emulation, popup source, silent popups, reveal for capture, 60 s screenshot ceiling | see § Focus zero | **shrunk**: what upstream now does left the patch (below) | ours; upstream covers part (#43864 `--background`, #43258, #44047) |
-| 3 | agent-created tabs are **closed** when the client leaves (a dead worker's too); user tabs only go free | extension: `agentTabs.ts` (new), `ownedTab.ts` (`agent`), `tabRegistry.ts` (`claim(…, {agent})`, `closeAgentTabs`, `onDetach` demotion, popup origin), `tabPicker.ts` (blank tab = agent's), `clientSession.ts` (`chrome.tabs.create` claims with `agent: true`), `connectionBroker.ts` (`_closeSession`), `background.ts` (dead-worker cleanup, 3 s cap), `types.ts` + `ui/connect.tsx` (`closeAgentTabs`, `agentTabs=keep`); server: `mcp/cdpRelay.ts` (`agentTabs=keep` in the connect URL); `tests/extension/tab-ownership.spec.ts`, `tests/extension/harness.ts` | **redesigned** on the ownership model of #44047; switch `PLAYWRIGHT_MCP_AGENT_TABS=keep` gives upstream's behavior back | upstream keeps every tab in a resumable gray group, by design (#41864, #44047) |
+| 3 | agent-created tabs are **closed** when the client leaves (a dead worker's too); user tabs only go free | extension: `agentTabs.ts` (new), `ownedTab.ts` (`agent`), `tabRegistry.ts` (`claim(…, {agent})`, `closeAgentTabs`, `onDetach` demotion, popup origin), `tabPicker.ts` (blank tab = agent's), `clientSession.ts` (`chrome.tabs.create` claims with `agent: true`), `connectionBroker.ts` (`_closeSession`), `background.ts` (dead-worker cleanup, 3 s cap), `types.ts` + `ui/connect.tsx` (`closeAgentTabs`, `agentTabs=keep`); server: `mcp/cdpRelay.ts` (`agentTabs=keep` in the connect URL); `tests/extension/tab-ownership.spec.ts`, `tests/extension/harness.ts` | **redesigned** on the ownership model of #44047; switch `PLAYWRIGHT_MCP_AGENT_TABS=keep` gives upstream's behavior back; plus (15/11, `0.5.0.4`): an agent tab closes past a "Leave site?" dialog (§ Tab ownership) | upstream keeps every tab in a resumable gray group, by design (#41864, #44047) |
 | 8 | a client can delete **some** cookies (by name or domain), not plant one or clear them all | extension: `cdpPolicy.ts` (`onlyExpiredCookies`, `cookieSitesOutside`, `Network.setCookie(s)`/`deleteCookies` refused), `clientSession.ts` (`_checkCookieSites`); `tests/extension/cookies.spec.ts` | **new** (15/11) | upstream refuses `Storage.setCookies` entirely (#44047), which also blocks `browser_cookie_delete` |
 | 4 | the fork's own visual for the extension UI | (was `extension/src/ui/connect.css` & co.) | **postponed** (decision D6 of the sync roadmap): upstream's new UI already follows the system dark theme (`ui/colors.css`, `ui/common.css`); only the fork's own look is missing, a CSS-only patch if ever wanted | declined (#41841) |
 | 9 | `browser_use_profile({ profile })`: the conversation picks a vault variant (token + Chrome profile folder) at run time; every agent's backend closes and reopens in it | `backend/useProfile.ts` (schema, vault reading, description), `mcp/agentRouter.ts` (the switch itself), `backend/extensionSession.ts` (`relayScope.profile`), `mcp/extensionContextFactory.ts` + `mcp/cdpRelay.ts` (token and folder of the chosen variant, carrier only of the same profile, spawn `error` handled), `mcp/program.ts` (start folder to the router), `tests/mcp/use-profile.spec.ts`, `tests/extension/use-profile.spec.ts` | **new** (15/11, branch `feat-use-profile`) | ours |
+| — | a current tab that Chrome detached from the debugger (a PDF in an iframe) comes back current, at its place, unless the agent selected or opened a tab meanwhile; the "Target page … has been closed" error of the call stays | `backend/context.ts` (`_lostCurrentTab`), `tests/extension/scheme-detach.spec.ts` | new (15/11, branch `fix-popup-page-closed`) | not sent upstream |
 | — | extension tests run on Windows: the relay starts a `.js` browser executable with `node`; `PWTEST_CHROME_STUB_FOREGROUND` plays Chrome < 158 | `mcp/cdpRelay.ts` (2 lines at the `spawn`), `tests/extension/chrome-stub.js` | new (12/11) | not sent upstream |
 
-Manifest `0.5.0.3` = upstream's `0.5.0` + the three extension patches (7, 3, 8); extra permission `webNavigation`
+Manifest `0.5.0.4` (`0.5.0.3` until the 15/11 integration added the "Leave site?" close of patch 3) = upstream's
+`0.5.0` + the three extension patches (7, 3, 8); extra permission `webNavigation`
 (popup source). The fork's commands `extension.setGroupLabel`, `extension.revealForCapture` and
 `extension.restoreAfterCapture` are documented here, not in upstream's `packages/extension/design.md`.
 
@@ -58,6 +60,21 @@ has: `OwnedTab.agent` is true when the client created the tab, false when the us
   paths: the normal close (`TabRegistry.closeAgentTabs`, run by `ConnectionBroker._closeSession`) and the dead-worker
   cleanup (`closeAgentTabsOfPreviousServiceWorker`, `agentTabs.ts`). Seen live on 15/11: the agent's tab the user was
   looking at stayed in the gray group when the test client left.
+  ⚠️ **One exception, on the normal close only** (since `0.5.0.4`): an agent tab with a "Leave site?" dialog open (a
+  navigation of the agent waiting on it) closes even in front, because Chrome brings a tab with a dialog to the front
+  and nobody types into a page behind one. The dead-worker cleanup has no debugger, so there the rule has no exception.
+- **"Leave site?" on close** (since `0.5.0.4`, branch `fix-beforeunload` plus the 15/11 review): `chrome.tabs.remove`
+  runs the page's `beforeunload`, and a page that saw a click and has a handler kept its tab open with the dialog up,
+  hanging `browser_tabs close`, `browser_close` and the close on leave (so the user's tabs never went to the gray
+  group). An agent tab now closes like `page.close()` without the extension (`agentTabs.ts` `closeTabs`, also used by
+  `clientSession.ts` for `chrome.tabs.remove` of agent tabs): an open "Leave site?" dialog is dismissed, then the
+  dialog of the close is accepted, through the still attached debugger. The type of the open dialog is read from the
+  debugger events (`noteDebuggerEvent`, fed by `TabRegistry`), so an **alert, confirm or prompt is never answered**: an
+  agent tab behind closes past it (Chrome drops the dialog with the tab), one in front of the user goes free with it.
+  Each tab's close, the dismiss included, is capped at 5 s (`AGENT_TAB_CLOSE_CAP_MS`); the tabs close side by side, so a
+  leave waits 5 s at most for them. User tabs and navigations are unchanged: the user or `browser_handle_dialog`
+  answers those. A tab without the debugger (a dead worker's) gets the plain remove, and its dialog stays for the user.
+  Tests: `tests/extension/tab-ownership.spec.ts` ("Leave site?", "never dismissed", "5 s at most").
 - Each agent tab is closed on its own (`Promise.allSettled`, with a retry while the user drags a tab), so one tab
   already gone does not keep the others open.
 - `PLAYWRIGHT_MCP_AGENT_TABS=keep` (server env): the connect URL carries `agentTabs=keep` and nothing is closed, as
@@ -289,6 +306,12 @@ cookie, `browser_cookie_clear` without a filter, permissions and cache stay refu
 
 - `browser_set_group_label` errors with `--extension --shared-browser-context`: that mode reconnects through another
   `Browser` object, so the registry lookup misses.
+- `browser_use_profile` answers an error instead of switching with `--extension` and the router off
+  (`PLAYWRIGHT_MCP_AGENT_ROUTING=off`, `--shared-browser-context`): § Profile per conversation.
+- Downloads in extension mode: `page.waitForEvent('download')` never fires (reported on 15/11). Upstream's
+  design, not a fork bug: the extension connects with `noDefaults`, so the download behavior of the browser is left to
+  Chrome (the file still lands in the user's Downloads folder). Workaround for agents: watch the Downloads folder for
+  the new file instead of waiting for the event.
 - A tab dragged by hand into a sub-agent's group **is** handed to that sub-agent (upstream's model since #44047; the
   old fork ignored it).
 - A sub-agent's screenshot, and the main agent's with a token, can be slow while you look at the Chrome window (no
@@ -365,10 +388,11 @@ Likely conflicts (the files upstream keeps rewriting, where the fork's lines liv
 
 - `packages/extension/src/tabRegistry.ts` (patch 3 and popup source: `claim`'s `agent` option and the same-owner
   branch, `closeAgentTabs`, the `onDetach` demotion, `forgetAgentTabs` in `release` and `_onTabRemoved`,
+  `noteDebuggerEvent`/`forgetOpenDialog` in the `onEvent`/`onDetach` listeners and `_onTabRemoved`,
   `popupSourceEvents`, the early return in `_onTabCreated`, `_onPopupCreated`);
 - `packages/extension/src/clientSession.ts` (`checkCdpMethod(…, params)` and `_checkCookieSites`, the
-  `connect.html` carrier branch and `agent: true` in `chrome.tabs.create`, the carried-page exception in
-  `chrome.tabs.remove`, the `extension.revealForCapture`/`restoreAfterCapture`/`setGroupLabel` cases);
+  `connect.html` carrier branch and `agent: true` in `chrome.tabs.create`, the carried-page exception and the agent
+  tabs sent to `closeTabs` in `chrome.tabs.remove`, the `extension.revealForCapture`/`restoreAfterCapture`/`setGroupLabel` cases);
 - `packages/extension/src/connectionBroker.ts` (`FocusMemory` in the constructor, `token` and `putBack` in
   `connect`, `onSetGroupLabel`, `_closeSession` instead of `releaseAll` + `orphan` in `onClose`);
 - `packages/extension/src/tabGroupManager.ts` (`ClientTabGroup.title`/`setTitle`, `setLabel`);
@@ -385,7 +409,9 @@ Likely conflicts (the files upstream keeps rewriting, where the fork's lines liv
   `_captureRevealed` in `handleCDPCommand`, focus emulation in `_attachTab`);
 - `mcp/protocol.ts` (the three `extension.*` commands in `ExtensionCommands`), `mcp/extensionContextFactory.ts`
   (`registerExtensionRelay`), `mcp/program.ts` (keep `withAgentRouting(factory, config)` around whatever upstream
-  passes to `start`), `backend/screenshot.ts` (`screenshotTimeoutFor(tab)` instead of `actionTimeoutOptions`, the
+  passes to `start`), `backend/context.ts` (the detached current tab coming back: `kLostTabReturnMs`,
+  `_lostCurrentTab` and its uses in `closeTab`, `newTab`, `selectTab`, `_onPageCreated`, `_onPageClosed`),
+  `backend/screenshot.ts` (`screenshotTimeoutFor(tab)` instead of `actionTimeoutOptions`, the
   `pw:mcp:shot` `try/finally`), `backend/common.ts` (the `browser_close` text), `backend/tools.ts` (keep
   `groupLabel` in the list), `tools/index.ts` (the fork's exports), `tests/mcp/capabilities.spec.ts` (keep
   `browser_set_group_label`), `tests/extension/harness.ts` (`agentTabs=keep` default), `tests/extension/chrome-stub.js`;
@@ -421,7 +447,8 @@ fork (see § Known limitations).
 
 **The Chrome profile follows the active token.** Each vault token `PLAYWRIGHT_MCP_EXTENSION_TOKEN__<variant>` in
 `~/.claude.json` has its profile folder registered beside it, `PLAYWRIGHT_MCP_PROFILE_DIR_NAME__<variant>` (`padrao` =
-`Profile 13`, `andressa` = `Profile 7`, `gabriel_pessoal` = `Default`, `jacira` = `Profile 6`). The wrapper
+`Profile 13`, `gabriel_pessoal` = `Default`, `jacira` = `Profile 6`, `andressa` = `Profile 7`, `dosxnjos` = `Profile 14`,
+`sofia` = `Profile 3`). The wrapper
 (`envForActiveProfile`) finds the variant whose token equals the active `PLAYWRIGHT_MCP_EXTENSION_TOKEN` and exports
 `PLAYWRIGHT_MCP_PROFILE_DIR_NAME` for the server; an explicit value wins, the legacy `PLAYWRIGHT_MCP_PROFILE_DIRECTORY`
 is a fallback, and no match logs a warning instead of guessing. Without a profile Chrome opens the connect page in the
@@ -485,7 +512,7 @@ no agent connected (a Reload wipes `chrome.storage.session`, see below). A new p
 may ask for a click; until it is accepted the extension stays disabled in that profile.
 
 **Profiles (15/11/2026).** Only **Profile 13** matters (the Gabriel, 15/11) and only it runs the fork's copy
-(`0.5.0.3`). Profile 7 still has an old fork copy (`0.4.0.5`); Profile 6 and Default use the Chrome Web Store copy
+(`0.5.0.3`; `0.5.0.4` after the Reload of the cut-over that carries it). Profile 7 still has an old fork copy (`0.4.0.5`); Profile 6 and Default use the Chrome Web Store copy
 (`0.5.0`). A server whose token points to one of those talks to a different extension: the extension-side patches
 (3, 7, 8 and the label command) are missing there.
 
@@ -503,7 +530,9 @@ rarer. The fork adds patch 3 on top: agent tabs are recorded in `chrome.storage.
 `agentTabs.ts`; it dies with the browser session, so a tab id reused after a restart is never mistaken for an
 agent's), and the next worker closes them (`closeAgentTabsOfPreviousServiceWorker`, run beside upstream's start-up in
 `background.ts`, capped at 3 s so it never holds a new connection for long), except the tab in front of the user
-(§ Tab ownership). With no record (a worker of an older version) nothing is closed, as upstream.
+(§ Tab ownership; ⚠️ here without the "Leave site?" exception of the normal close, since this worker has no debugger on
+those tabs: an agent tab in front with that dialog stays, and so does the dialog). With no record (a worker of an older
+version) nothing is closed, as upstream.
 ⚠️ `chrome.storage.session` is also wiped when the extension is **reloaded, updated or disabled**: the next worker
 finds no record, so agent tabs of a connection alive at that moment stay open in a gray group (close them by hand).
 Test: `tests/extension/tab-ownership.spec.ts` "agent tabs of a dead service worker close, unless the user looks at

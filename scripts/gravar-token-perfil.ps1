@@ -5,7 +5,8 @@
 # Uso:
 #   powershell -ExecutionPolicy Bypass -File C:\Dev\playwright\scripts\gravar-token-perfil.ps1 -Variante jacira
 #   perfil novo: ... -Variante <nome> -Perfil "Profile 8"   (pasta do perfil em chrome://version)
-# Variantes de hoje: padrao (Profile 13), gabriel_pessoal (Default), jacira (Profile 6), andressa (Profile 7).
+# Variantes de hoje: padrao (Profile 13), gabriel_pessoal (Default), jacira (Profile 6), andressa (Profile 7),
+# dosxnjos (Profile 14), sofia (Profile 3).
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-z][a-z0-9_]*$')][string]$Variante,
   [string]$Perfil = ''
