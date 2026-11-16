@@ -63,6 +63,8 @@ has: `OwnedTab.agent` is true when the client created the tab, false when the us
   ⚠️ **One exception, on the normal close only** (since `0.5.0.4`): an agent tab with a "Leave site?" dialog open (a
   navigation of the agent waiting on it) closes even in front, because Chrome brings a tab with a dialog to the front
   and nobody types into a page behind one. The dead-worker cleanup has no debugger, so there the rule has no exception.
+  Cost (15/11 review, accepted): the extension cannot tell who started the navigation, so a "Leave site?" the **user**
+  raised on an agent tab in front (a reload over unsaved form data) at the moment the client leaves also closes it.
 - **"Leave site?" on close** (since `0.5.0.4`, branch `fix-beforeunload` plus the 15/11 review): `chrome.tabs.remove`
   runs the page's `beforeunload`, and a page that saw a click and has a handler kept its tab open with the dialog up,
   hanging `browser_tabs close`, `browser_close` and the close on leave (so the user's tabs never went to the gray
@@ -72,7 +74,8 @@ has: `OwnedTab.agent` is true when the client created the tab, false when the us
   debugger events (`noteDebuggerEvent`, fed by `TabRegistry`), so an **alert, confirm or prompt is never answered**: an
   agent tab behind closes past it (Chrome drops the dialog with the tab), one in front of the user goes free with it.
   Each tab's close, the dismiss included, is capped at 5 s (`AGENT_TAB_CLOSE_CAP_MS`); the tabs close side by side, so a
-  leave waits 5 s at most for them. User tabs and navigations are unchanged: the user or `browser_handle_dialog`
+  leave waits 5 s at most for them. The cap frees the extension, not a `browser_tabs close` whose tab did not go: its
+  server side (`page.close()`) still waits for the tab (read from the code; it takes a debugger that never answers). User tabs and navigations are unchanged: the user or `browser_handle_dialog`
   answers those. A tab without the debugger (a dead worker's) gets the plain remove, and its dialog stays for the user.
   Tests: `tests/extension/tab-ownership.spec.ts` ("Leave site?", "never dismissed", "5 s at most").
 - Each agent tab is closed on its own (`Promise.allSettled`, with a retry while the user drags a tab), so one tab
